@@ -262,11 +262,11 @@ struct cvi_i2s_dev {
 };
 
 #if IS_ENABLED(CONFIG_SND_CV1835_PCM)
-void cvi_pcm_push_tx(struct cvi_i2s_dev *dev);
-int cvi_pcm_register(struct platform_device *pdev);
+static void cvi_pcm_push_tx(struct cvi_i2s_dev *dev);
+static int cvi_pcm_register(struct platform_device *pdev);
 #else
-void cvi_pcm_push_tx(struct cvi_i2s_dev *dev) { }
-int cvi_pcm_register(struct platform_device *pdev)
+static void cvi_pcm_push_tx(struct cvi_i2s_dev *dev) { }
+static int cvi_pcm_register(struct platform_device *pdev)
 {
 	return -EINVAL;
 }

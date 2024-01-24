@@ -1,1 +1,1 @@
-obj-y += pinctrl-$(patsubst "%",%,${CONFIG_ARCH_CVITEK_CHIP}).o
+obj-y += pinctrl-athena2.o

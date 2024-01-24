@@ -377,7 +377,9 @@ struct spi_nor {
 	enum spi_nor_protocol	reg_proto;
 	bool			sst_write_second;
 	u32			flags;
-
+#ifdef CONFIG_SPI_FLASH_BAR
+	u8			current_bank;
+#endif
 	const struct spi_nor_controller_ops *controller_ops;
 
 	struct spi_nor_flash_parameter *params;

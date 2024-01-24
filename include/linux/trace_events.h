@@ -789,6 +789,9 @@ perf_trace_buf_submit(void *raw_data, int size, int rctx, u16 type,
 	perf_tp_event(type, count, raw_data, size, regs, head, rctx, task);
 }
 
+void atrace_begin_body(const char *name);
+void atrace_end_body(void);
+
 #endif
 
 #endif /* _LINUX_TRACE_EVENT_H */

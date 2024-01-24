@@ -8,7 +8,9 @@
 __weak void arch_freq_prepare_all(void)
 {
 }
-
+__weak long hartid_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+	return 0;
+}
 extern const struct seq_operations cpuinfo_op;
 static int cpuinfo_open(struct inode *inode, struct file *file)
 {
@@ -22,6 +24,7 @@ static const struct proc_ops cpuinfo_proc_ops = {
 	.proc_read_iter	= seq_read_iter,
 	.proc_lseek	= seq_lseek,
 	.proc_release	= seq_release,
+	.proc_ioctl	= hartid_ioctl,
 };
 
 static int __init proc_cpuinfo_init(void)

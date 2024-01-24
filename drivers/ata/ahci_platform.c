@@ -40,6 +40,101 @@ static struct scsi_host_template ahci_platform_sht = {
 	AHCI_SHT(DRV_NAME),
 };
 
+#define SSPERI_TOP_REG_BASE     0x20BE0000
+#define SSPERI_AXI_BASE         0x20000000
+
+int sophgo_phy_init(void)
+{
+	uint32_t reg;
+	int timeout = 100;
+	void __iomem *axi_base = NULL;
+
+	axi_base = ioremap(SSPERI_AXI_BASE, 0x44);
+	if (axi_base == NULL) {
+		pr_info("ioremap failed!\n");
+		return -1;
+	}
+	reg = readl(axi_base + 0x40);
+	reg &=~(0x1 << 2);
+	writel(reg, axi_base + 0x40);
+	iounmap(axi_base);
+
+	void __iomem *top_base = NULL;
+	top_base = ioremap(SSPERI_TOP_REG_BASE, 0x4f0);
+	if (top_base == NULL) {
+		pr_info("ioremap failed!\n");
+		return -1;
+	}
+
+	/* set pipe for sata and pcie both enable */
+	reg = readl(top_base + 0x44);
+	/* pipe mode set for sata */
+	reg &=~(0x3);
+	reg |= (0x2);
+	writel(reg, top_base + 0x44);
+
+	/* set phy protocol for sata operation */
+	reg = readl(top_base + 0x278);
+	reg &=~(0x3);
+	reg |= 0x2;
+	writel(reg, top_base + 0x278);
+
+	/* phy lane0 rx_term_acdc control bit */
+	reg = readl(top_base + 0x48);
+	reg &=~(0x3);
+	reg |= 0x2;
+	writel(reg, top_base + 0x48);
+
+	/* phy vph for 1.8v */
+	reg = readl(top_base + 0x34);
+	reg &=~(0x7);
+	reg |= 0x7;
+	writel(reg, top_base + 0x34);
+
+	/* phy0 sram_ld_done 0
+	 * phy0 sram_bypass 0
+	 * phy0 refclk for use_pad，
+	 * phy0 ref_repeat_clk
+	 */
+	reg = readl(top_base + 0x4b0);
+	reg &= ~(0xf << 24);
+	reg &= ~(0x1 << 23);
+	reg |= (0x2 << 24);
+	reg |= (0x1 << 23);
+	writel(reg, top_base + 0x4b0);
+
+	/* set phy0 pwr_en/stable */
+	reg = readl(top_base + 0x4b8);
+	reg |= (0xf << 15);
+	writel(reg, top_base + 0x4b8);
+
+	reg = readl(top_base + 0x4a4);
+	reg |= (0x1 << 10);
+	writel(reg, top_base + 0x4a4);
+
+	udelay(10);
+	/* release phy_reset */
+	reg = readl(top_base + 0x34);
+	reg |= 0x1 << 28;
+	writel(reg, top_base + 0x34);
+
+	while (!(readl(top_base + 0x4b8) & 0x20)) {
+		if (timeout-- > 0) {
+			mdelay(1);
+		} else {	
+			pr_info("phy sram init timeout");
+			return -1;
+			//break;
+		}
+	}
+	reg = readl(top_base + 0x4b0);
+	reg |= 0x1 << 27;
+	writel(reg, top_base + 0x4b0);
+
+	iounmap(top_base);
+	return 0;
+}
+
 static int ahci_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -65,6 +160,10 @@ static int ahci_probe(struct platform_device *pdev)
 	port = acpi_device_get_match_data(dev);
 	if (!port)
 		port = &ahci_port_info;
+
+	rc = sophgo_phy_init();
+	if (rc)
+		return rc;
 
 	rc = ahci_platform_init_host(pdev, hpriv, port,
 				     &ahci_platform_sht);

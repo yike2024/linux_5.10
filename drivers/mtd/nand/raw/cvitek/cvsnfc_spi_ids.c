@@ -98,7 +98,61 @@ char ECC_GD_8bit_remap[16] = {0, 0, 0, 0, 4, 5, 6, 7, 0, 0, 0, 0, 8, 8, 8, 8};
 char ECC_HYF2G_remap[4] = {0, 1, -1, 14};
 
 struct cvsnfc_chip_info nand_flash_cvitek_supported_ids[] = {
+	// 1.8 V
+	{
+		{	.name = "W25N01GW",
+			.id = {0xef, 0xba, 0x21},
+			.pagesize = SZ_2K,
+			.chipsize = SZ_128,
+			.erasesize = SZ_128K,
+			.options = 0,
+			.id_len = 3,
+			.oobsize = SZ_64,
+			{	.strength_ds = 8,
+				.step_ds = SZ_512
+			},
+		},
 
+		{	.ecc_sr_addr = 0xc0,
+			.ecc_mbf_addr = 0x30,
+			.read_ecc_opcode = 0,
+			.ecc_bits = 4,
+			.ecc_bit_shift = 4,
+			.uncorr_val = 0x2,
+			.remap = NULL
+		},
+		.driver = &spi_nand_driver_toshiba,
+		.flags = 0
+	},
+
+	{
+		{	.name = "25N02KWZEIR",
+			.id = {0xef, 0xba, 0x22},
+			.pagesize = SZ_2K,
+			.chipsize = SZ_256,
+			.erasesize = SZ_128K,
+			.options = 0,
+			.id_len = 3,
+			.oobsize = SZ_128,
+			{	.strength_ds = 8,
+				.step_ds = SZ_512
+			},
+		},
+
+		{	.ecc_sr_addr = 0xc0,
+			.ecc_mbf_addr = 0x30,
+			.read_ecc_opcode = 0,
+			.ecc_bits = 4,
+			.ecc_bit_shift = 4,
+			.uncorr_val = 0x2,
+			.remap = NULL
+		},
+		.driver = &spi_nand_driver_toshiba,
+		.flags = FLAGS_SET_PLANE_BIT
+	},
+
+
+	//3.3 V
 	{
 		{	.name = "F50L1G41LB",
 			.id = {0xC8, 0x01},

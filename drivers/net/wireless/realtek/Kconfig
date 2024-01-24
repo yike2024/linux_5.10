@@ -42,4 +42,12 @@ config RTL8723DS
       This chip work through SDIO.
       You need to say Y if your board use this chip to implement wifi
 
+config RTL8852BE
+	tristate "Realtek 8852BE PCI wireless network (Wi-Fi 6) adapter"
+	depends on PCI
+	help
+	  Select this option will enable support for 8852BE chipset
+
+	  802.11ax PCIe wireless network (Wi-Fi 6) adapter
+
 endif # WLAN_VENDOR_REALTEK

@@ -90,7 +90,37 @@ static void i2s_fifo_reset(struct cvi_i2s_dev *dev, u32 stream)
 		i2s_write_reg(dev->i2s_base, FIFO_RESET, RX_FIFO_RESET_PULL_DOWN);
 	}
 }
+#if 0
+static void i2s_debug(struct cvi_i2s_dev *dev)
+{
+	printk("[i2s_reg]\n");
 
+	printk("BLK_MODE_SETTING:0x%x\n", i2s_read_reg(dev->i2s_base, 0x0));
+	printk("FRAME_SETTING:0x%x\n", i2s_read_reg(dev->i2s_base, 0x4));
+	printk("SLOT_SETTING1:0x%x\n", i2s_read_reg(dev->i2s_base, 0x8));
+	printk("SLOT_SETTING2:0x%x\n", i2s_read_reg(dev->i2s_base, 0xc));
+
+	printk("DATA_FORMAT:0x%x\n", i2s_read_reg(dev->i2s_base, 0x10));
+	printk("BLK_CFG:0x%x\n", i2s_read_reg(dev->i2s_base, 0x14));
+	printk("I2S_ENABL:0x%x\n", i2s_read_reg(dev->i2s_base, 0x18));
+	printk("I2S_RESET:0x%x\n", i2s_read_reg(dev->i2s_base, 0x1c));
+
+	printk("I2S_INT_EN:0x%x\n", i2s_read_reg(dev->i2s_base, 0x20));
+	printk("I2S_INT:0x%x\n", i2s_read_reg(dev->i2s_base, 0x24));
+	printk("FIFO_THRESHOLD:0x%x\n", i2s_read_reg(dev->i2s_base, 0x28));
+	printk("I2S_LRCK_MASTER:0x%x\n", i2s_read_reg(dev->i2s_base, 0x2c));
+
+	printk("FIFO_RESET:0x%x\n", i2s_read_reg(dev->i2s_base, 0x30));
+	printk("RX_STATUS:0x%x\n", i2s_read_reg(dev->i2s_base, 0x40));
+	printk("TX_STATUS:0x%x\n", i2s_read_reg(dev->i2s_base, 0x48));
+	printk("FIFO_STATUS:0x%x\n", i2s_read_reg(dev->i2s_base, 0x4c));
+
+	printk("I2S_CLK_CTRL0:0x%x\n", i2s_read_reg(dev->i2s_base, 0x60));
+	printk("I2S_CLK_CTRL1:0x%x\n", i2s_read_reg(dev->i2s_base, 0x64));
+	printk("I2S_PCM_SYNTH:0x%x\n", i2s_read_reg(dev->i2s_base, 0x68));
+
+}
+#endif
 #define I2S_RETRY_COUNT 30000
 static void i2s_reset(struct cvi_i2s_dev *dev, u32 stream)
 {
@@ -331,15 +361,20 @@ static int cvi_i2s_hw_params(struct snd_pcm_substream *substream,
 			} else if (!strcmp(substream->pcm->card->shortname, "cv182x_adc") ||
 				!strcmp(substream->pcm->card->shortname, "cv182x_dac") ||
 				!strcmp(substream->pcm->card->shortname, "cv182xa_adc") ||
-				!strcmp(substream->pcm->card->shortname, "cv182xa_dac")) {
+				!strcmp(substream->pcm->card->shortname, "cv182xa_dac") ||
+				!strcmp(substream->pcm->card->shortname, "cv186x_adc") ||
+				!strcmp(substream->pcm->card->shortname, "cv186x_dac")) {
 				if (!strcmp(substream->pcm->card->shortname, "cv182x_dac") ||
-					!strcmp(substream->pcm->card->shortname, "cv182xa_dac")) {
+					!strcmp(substream->pcm->card->shortname, "cv182xa_dac") ||
+					!strcmp(substream->pcm->card->shortname, "cv186x_adc") ||
+					!strcmp(substream->pcm->card->shortname, "cv186x_dac")) {
 					/* For cv182x and cv182xa DAC codec, while playing with mono audio data,
 					 * need to assume there are 2 channels but skip 1. Thus, need
 					 * to set frame length as 32, slot_num as 2, slot_en as 1 and
 					 * skip tx inactivate slot. I2S will duplucate 16 bits into
 					 * another skiped channel
 					 */
+
 					switch (config->chan_nr) {
 					case 1:
 						frame_setting |= FRAME_LENGTH(32) | FS_ACT_LENGTH(16);
@@ -374,7 +409,9 @@ static int cvi_i2s_hw_params(struct snd_pcm_substream *substream,
 		if (!strcmp(substream->pcm->card->shortname, "cv182x_adc") ||
 			!strcmp(substream->pcm->card->shortname, "cv182x_dac") ||
 			!strcmp(substream->pcm->card->shortname, "cv182xa_adc") ||
-			!strcmp(substream->pcm->card->shortname, "cv182xa_dac")) {
+			!strcmp(substream->pcm->card->shortname, "cv182xa_dac") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_adc") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_dac")) {
 			dev_err(dev->dev, "24 bit resolution is not supported\n");
 			return -EINVAL;
 		}
@@ -402,8 +439,9 @@ static int cvi_i2s_hw_params(struct snd_pcm_substream *substream,
 		if (!strcmp(substream->pcm->card->shortname, "cv182x_adc") ||
 			!strcmp(substream->pcm->card->shortname, "cv182x_dac") ||
 			!strcmp(substream->pcm->card->shortname, "cv182xa_adc") ||
-			!strcmp(substream->pcm->card->shortname, "cv182xa_dac")
-			) {
+			!strcmp(substream->pcm->card->shortname, "cv182xa_dac") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_adc") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_dac")) {
 			dev_err(dev->dev, "32 bit resolution is not supported\n");
 			return -EINVAL;
 		}
@@ -492,7 +530,9 @@ static int cvi_i2s_hw_params(struct snd_pcm_substream *substream,
 	case 16000:
 	case 32000:
 		if (!strcmp(substream->pcm->card->shortname, "cv182xa_adc") ||
-			!strcmp(substream->pcm->card->shortname, "cv182xa_dac"))
+			!strcmp(substream->pcm->card->shortname, "cv182xa_dac") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_adc") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_dac"))
 			audio_clk = CVI_16384_MHZ;
 		else
 			audio_clk = CVI_24576_MHZ;
@@ -569,7 +609,9 @@ static int cvi_i2s_hw_params(struct snd_pcm_substream *substream,
 			break;
 		}
 	} else if (!strcmp(substream->pcm->card->shortname, "cv182xa_adc") ||
-			!strcmp(substream->pcm->card->shortname, "cv182xa_dac")) {
+			!strcmp(substream->pcm->card->shortname, "cv182xa_dac") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_adc") ||
+			!strcmp(substream->pcm->card->shortname, "cv186x_dac")) {
 		/* cv182xa internal adc codec need dynamic MCLK frequency input */
 
 		switch (config->sample_rate) {
@@ -592,9 +634,10 @@ static int cvi_i2s_hw_params(struct snd_pcm_substream *substream,
 			break;
 		}
 	} else {
-		if ((audio_clk == CVI_24576_MHZ) || (audio_clk == CVI_22579_MHZ))
+		if ((audio_clk == CVI_24576_MHZ) || (audio_clk == CVI_22579_MHZ)) {
 			clk_ctrl1 |= MCLK_DIV(2);
-		else
+			mclk_div = 2;
+		} else
 			dev_err(dev->dev, "Get unexpected audio system clk=%d\n", audio_clk);
 	}
 
@@ -702,7 +745,6 @@ static int cvi_i2s_trigger(struct snd_pcm_substream *substream,
 			i2s_master_clk_switch_on(true);
 		}
 #endif
-
 		cvi_i2s_resume(dai);
 		i2s_start(dev, substream);
 		snd_pcm_stream_lock_irq(substream);
@@ -713,6 +755,7 @@ static int cvi_i2s_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 //		snd_pcm_stream_unlock_irq(substream);
 		dev->active--;
+//		i2s_debug(dev);
 		i2s_stop(dev, substream);
 #if defined(CONFIG_SND_SOC_CV1835_CONCURRENT_I2S)
 		if ((dev->dev_id != 0) && (dev->dev_id != 3) && (dev->dev_id != i2s_subsys_query_master())) {
@@ -720,9 +763,7 @@ static int cvi_i2s_trigger(struct snd_pcm_substream *substream,
 			i2s_master_clk_switch_on(false);
 		}
 #endif
-
 		cvi_i2s_suspend(dai);
-
 //		snd_pcm_stream_lock_irq(substream);
 		break;
 	default:

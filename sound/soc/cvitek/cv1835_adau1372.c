@@ -45,6 +45,7 @@ static int cv1835_adau1372_hw_params(struct snd_pcm_substream *substream,
 
 static int cv1835_adau1372_codec_init(struct snd_soc_pcm_runtime *rtd)
 {
+#if 0
 	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	u32 ret;
@@ -61,20 +62,67 @@ static int cv1835_adau1372_codec_init(struct snd_soc_pcm_runtime *rtd)
 		if (ret < 0)
 			return ret;
 	}
-
+#endif
 	return 0;
 }
 static struct snd_soc_ops cv1835_adau1372_ops = {
 	.hw_params = cv1835_adau1372_hw_params,
 };
 
+static struct snd_soc_dai_link_component cv1835_adc_cpus[] = {
+	{
+		.name = "29130000.i2s",
+		.dai_name = "29130000.i2s",
+	},
+	{
+		.name = "29120000.i2s",
+		.dai_name = "29120000.i2s",
+	},
+};
+
+static struct snd_soc_dai_link_component cv1835_adc_codecs[] = {
+	{
+		.name = "adau1372.0-003c",
+		.dai_name = "adau1372-aif",
+	},
+	{
+		.name = "adau1372.0-003c",
+		.dai_name = "adau1372-aif",
+	},
+};
+
+static struct snd_soc_dai_link_component cv1835_adc_platform[] = {
+	{
+		.name = "29130000.i2s",
+		.dai_name = "29130000.i2s",
+	},
+	{
+		.name = "29120000.i2s",
+		.dai_name = "29120000.i2s",
+	},
+};
+
 static struct snd_soc_dai_link cv1835_adau1372_dai[] = {
 	{
+		.cpus = &cv1835_adc_cpus[0],
+		.num_cpus = 1,
+		.codecs = &cv1835_adc_codecs[0],
+		.num_codecs = 1,
+		.platforms = &cv1835_adc_platform[0],
+		.num_platforms = 1,
+
 		.ops = &cv1835_adau1372_ops,
 		.init = cv1835_adau1372_codec_init,
 	},
 #if defined(CONFIG_SND_SOC_CV1835_CONCURRENT_I2S)
 	{
+		.cpus = &cv1835_adc_cpus[1],
+		.num_cpus = 1,
+		.codecs = &cv1835_adc_codecs[1],
+		.num_codecs = 1,
+		.platforms = &cv1835_adc_platform[1],
+		.num_platforms = 1,
+
 		.ops = &cv1835_adau1372_ops,
 		.init = cv1835_adau1372_codec_init,
 	},
@@ -128,12 +176,20 @@ static int cv1835_adau1372_probe(struct platform_device *pdev)
 		for_each_child_of_node(np, dai) {
 			of_property_read_string(dai, "cvi,dai_name", &card->dai_link[idx].name);
 			of_property_read_string(dai, "cvi,stream_name", &card->dai_link[idx].stream_name);
-			of_property_read_string(dai, "cvi,cpu_dai_name", &card->dai_link[idx].cpu_dai_name);
+			// of_property_read_string(dai, "cvi,cpu_dai_name", &card->dai_link[idx].cpus->dai_name);
+			// of_property_read_string(dai, "cvi,cpu_dai_name", &card->dai_link[idx].cpus->name);
 
-			of_property_read_string(dai, "cvi,codec_dai_name", &card->dai_link[idx].codec_dai_name);
-			of_property_read_string(dai, "cvi,platform_name", &card->dai_link[idx].platform_name);
-			of_property_read_string(dai, "cvi,codec_name", &card->dai_link[idx].codec_name);
+			// of_property_read_string(dai, "cvi,codec_name", &card->dai_link[idx].codecs->name);
+			// of_property_read_string(dai, "cvi,codec_dai_name", &card->dai_link[idx].codecs->dai_name);
 
+			// of_property_read_string(dai, "cvi,platform_name", &card->dai_link[idx].platforms->dai_name);
+			// of_property_read_string(dai, "cvi,platform_name", &card->dai_link[idx].platforms->name);
+			dev_info(&pdev->dev, "----star:%d----\n", idx);
+			dev_info(&pdev->dev, "dailink_name:%s, stream_name:%s\n", card->dai_link[idx].name, card->dai_link[idx].stream_name);
+			dev_info(&pdev->dev, "cpus[name:%s, dainame:%s]\n", card->dai_link[idx].cpus->name, card->dai_link[idx].cpus->dai_name);
+			dev_info(&pdev->dev, "codec[name:%s, dainame:%s]\n", card->dai_link[idx].codecs->name, card->dai_link[idx].codecs->dai_name);
+			dev_info(&pdev->dev, "platforms[name:%s, dainame:%s]\n", card->dai_link[idx].platforms->name, card->dai_link[idx].platforms->dai_name);
+			dev_info(&pdev->dev, "----end:%d ----\n", idx);
 			card->dev = &pdev->dev;
 
 			of_property_read_string(dai, "cvi,role", &role);

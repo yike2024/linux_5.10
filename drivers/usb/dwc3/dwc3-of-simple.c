@@ -21,6 +21,11 @@
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
+#include <linux/io.h>
+
+#if IS_ENABLED(CONFIG_ARCH_CVITEK)
+#include <linux/of_gpio.h>
+#endif
 
 struct dwc3_of_simple {
 	struct device		*dev;
@@ -28,13 +33,29 @@ struct dwc3_of_simple {
 	int			num_clocks;
 	struct reset_control	*resets;
 	bool			need_reset;
+	int vbus_gpio;
 };
+
+#define REG_USB_SYS_REG_0100	0x0
+#define reg_usb0_en				(1 << 0)
+
+#define REG_USB_SYS_REG_010C	0x0c
+#define reg_phy0_ref_ssp_en		(1 << 24)
+
+#define REG_USB_SYS_REG_0114	0x14
+#define reg_phy0_phy_reset		(1 << 5)
 
 static int dwc3_of_simple_probe(struct platform_device *pdev)
 {
 	struct dwc3_of_simple	*simple;
 	struct device		*dev = &pdev->dev;
 	struct device_node	*np = dev->of_node;
+
+#if IS_ENABLED(CONFIG_ARCH_CVITEK)
+	struct resource *res;
+	void __iomem *reg_usbsys;
+	uint32_t value;
+#endif
 
 	int			ret;
 
@@ -44,6 +65,44 @@ static int dwc3_of_simple_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, simple);
 	simple->dev = dev;
+
+#if IS_ENABLED(CONFIG_ARCH_CVITEK)
+	if (of_device_is_compatible(np, "sophgo,athena2-dwc3"))
+	{
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		reg_usbsys = devm_ioremap_resource(&pdev->dev, res);
+		if (IS_ERR(reg_usbsys))
+			return PTR_ERR(reg_usbsys);
+
+		value = readl(reg_usbsys + REG_USB_SYS_REG_0114) & (~reg_phy0_phy_reset);
+		writel(value, reg_usbsys + REG_USB_SYS_REG_0114);
+
+		value = readl(reg_usbsys + REG_USB_SYS_REG_010C) | (reg_phy0_ref_ssp_en);
+		writel(value, reg_usbsys + REG_USB_SYS_REG_010C);
+
+		uint32_t val;
+		uint32_t reg_addr = 0x28100044;
+		void __iomem *reg = ioremap(reg_addr, sizeof(uint32_t));
+		val = readl(reg);
+		val &= ~(0x3ff << 13);
+		val |= (0x78L << 13);
+		writel(val, reg);
+		iounmap(reg);
+
+		value = readl(reg_usbsys + REG_USB_SYS_REG_0100) | (1<<0) | (1<<29);
+		writel(value, reg_usbsys + REG_USB_SYS_REG_0100);
+
+		simple->vbus_gpio = of_get_named_gpio(simple->dev->of_node, "vbus-gpio", 0);
+		dev_dbg(simple->dev, "get vbus_gpio number:%d\n", simple->vbus_gpio);
+		if (gpio_is_valid(simple->vbus_gpio)) {
+			if (devm_gpio_request_one(simple->dev, simple->vbus_gpio, GPIOF_OUT_INIT_HIGH, "vbus-gpio"))
+			{
+				simple->vbus_gpio = -EINVAL;
+				dev_err(simple->dev, "request gpio fail!\n");
+			}
+		}
+	}
+#endif
 
 	/*
 	 * Some controllers need to toggle the usb3-otg reset before trying to
@@ -178,6 +237,7 @@ static const struct of_device_id of_dwc3_simple_match[] = {
 	{ .compatible = "allwinner,sun50i-h6-dwc3" },
 	{ .compatible = "hisilicon,hi3670-dwc3" },
 	{ .compatible = "intel,keembay-dwc3" },
+	{ .compatible = "sophgo,athena2-dwc3" },
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, of_dwc3_simple_match);

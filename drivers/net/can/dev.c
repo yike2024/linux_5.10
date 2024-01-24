@@ -847,10 +847,10 @@ int open_candev(struct net_device *dev)
 {
 	struct can_priv *priv = netdev_priv(dev);
 
-	if (!priv->bittiming.bitrate) {
-		netdev_err(dev, "bit-timing not yet defined\n");
-		return -EINVAL;
-	}
+	 if (!priv->bittiming.bitrate) {
+	 	netdev_err(dev, "bit-timing not yet defined\n");
+	 	return -EINVAL;
+	 }
 
 	/* For CAN FD the data bitrate has to be >= the arbitration bitrate */
 	if ((priv->ctrlmode & CAN_CTRLMODE_FD) &&

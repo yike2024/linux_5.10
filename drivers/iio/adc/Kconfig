@@ -6,6 +6,13 @@
 
 menu "Analog to digital converters"
 
+config CVITEK_ADC 
+	tristate "Analog Devices CVITEK ADC Driver"
+	depends on IIO && (ARCH_ATHENA2 || COMPILE_TEST)
+	default m
+	help
+	  Say yes here to build support for Analog Devices CVITEK ADC.
+
 config AB8500_GPADC
 	bool "ST-Ericsson AB8500 GPADC driver"
 	depends on AB8500_CORE && REGULATOR_AB8500

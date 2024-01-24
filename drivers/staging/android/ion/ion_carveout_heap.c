@@ -13,7 +13,6 @@
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-#include <linux/of.h>
 #include "ion.h"
 
 #define ION_CARVEOUT_ALLOCATE_FAIL	-1
@@ -110,30 +109,6 @@ static struct ion_heap_ops carveout_heap_ops = {
 	.unmap_kernel = ion_heap_unmap_kernel,
 };
 
-#ifdef CONFIG_ION_CVITEK
-void cvi_get_rtos_ion_size(size_t *psize)
-{
-	struct device_node * np;
-	u32 rtos_ion_size;
-	int ret;
-
-	np = of_find_compatible_node(NULL, NULL, "cvitek,rtos_image");
-	if (!np) {
-		*psize = 0;
-		return;
-	}
-
-	ret = of_property_read_u32(np, "ion-size", &rtos_ion_size);
-	*psize = rtos_ion_size;
-	if(ret)
-		*psize = 0;
-
-	of_node_put(np);
-
-	pr_info("%s, rtos ion_size get:0x%lx\n", __func__, *psize);
-}
-#endif
-
 struct ion_heap *ion_carveout_heap_create(struct ion_platform_heap *heap_data)
 {
 	struct ion_carveout_heap *carveout_heap;
@@ -141,28 +116,9 @@ struct ion_heap *ion_carveout_heap_create(struct ion_platform_heap *heap_data)
 
 	struct page *page;
 	size_t size;
-#ifdef CONFIG_ION_CVITEK
-	size_t rtos_ion_size;
-	struct page *rtos_end_page;
-	phys_addr_t heap_end_addr;
-#endif
 
 	page = pfn_to_page(PFN_DOWN(heap_data->base));
 	size = heap_data->size;
-
-	pr_info("%s, size=0x%lx\n", __func__, size);
-
-#ifdef CONFIG_ION_CVITEK
-	/* cvitek: freertos will use this space before linux boot up, we shouldn't modify it. */
-	cvi_get_rtos_ion_size(&rtos_ion_size);
-	if(rtos_ion_size){
-		heap_end_addr = heap_data->base + size;
-		rtos_end_page = pfn_to_page(PFN_UP(heap_data->base + rtos_ion_size));
-		size = heap_end_addr - page_to_phys(rtos_end_page);
-		page = rtos_end_page;
-		pr_info("%s, size(exclusion of rtos_ion_size)=0x%lx\n", __func__, size);
-	}
-#endif
 
 	ret = ion_heap_pages_zero(page, size, pgprot_writecombine(PAGE_KERNEL));
 	if (ret)

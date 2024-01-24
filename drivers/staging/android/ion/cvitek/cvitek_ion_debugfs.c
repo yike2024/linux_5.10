@@ -34,8 +34,8 @@ void show_bitmap_mem_usage(struct seq_file *s, u32 heap_id, struct gen_pool_chun
 	phys_addr_t region_start_addr;
 	phys_addr_t region_end_addr;
 	u64 region_len;
-	u32 free_index_start;
-	u32 free_index_end = 0;
+	u64 free_index_start;
+	u64 free_index_end = 0;
 	phys_addr_t chunk_start_addr = chunk->start_addr;
 
 	seq_printf(s, "\n\nminimum ion allocate unit = %u\n", (u32)(2 << (order - 1)));
@@ -110,8 +110,9 @@ static int cvi_ion_debug_heap_show(struct seq_file *s, void *unused)
 	if (heap->debug_show)
 		heap->debug_show(heap, s, unused);
 
-	tmp = (uint64_t)alloc_size * 100;
-	rem = do_div(tmp, total_size);
+	//In 4K(0x1 << 12) units
+	tmp = (uint64_t)alloc_size * 100 >> 12;
+	rem = do_div(tmp, total_size >> 12);
 	usage_rate = tmp;
 	if (rem)
 		usage_rate += 1;

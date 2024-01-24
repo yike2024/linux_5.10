@@ -39,6 +39,33 @@ config DRM_PANEL_BOE_HIMAX8279D
 	  24 bit RGB per pixel. It provides a MIPI DSI interface to
 	  the host and has a built-in LED backlight.
 
+config DRM_PANEL_HIMAX_HX8394
+	tristate "HIMAX HX8394 MIPI-DSI LCD panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	help
+	  Say Y if you want to enable support for panels based on the
+	  Himax HX8394 controller.
+
+	  If M is selected the module will be called panel-himax-hx8394.
+
+config DRM_PANEL_HIMAX_HX8399
+	tristate "HIMAX HX8399 MIPI-DSI LCD panels"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	help
+	  Say Y if you want to enable support for panels based on the
+	  Himax HX8399 controller.
+
+	  If M is selected the module will be called panel-himax-hx8399.
+
+config DRM_PANEL_LCM18X56
+	tristate "LCM18X56 LVDS panels"
+	depends on OF
+	select VIDEOMODE_HELPERS
+	help
+	  This driver supports LCM18X56 LVDS panels.
+
 config DRM_PANEL_BOE_TV101WUM_NL6
 	tristate "BOE TV101WUM and AUO KD101N80 45NA 1200x1920 panel"
 	depends on OF

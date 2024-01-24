@@ -4,6 +4,12 @@
 #ifndef _CV1835_I2S_SUBSYS_H_
 #define _CV1835_I2S_SUBSYS_H_
 
+
+//dw_i2s
+#define DWI2S_MODE_REG_VAL 0xf0
+#define DWI2S_CLK_CTRL0_VAL 0x140
+#define DWI2S_SLAVEMODE_SOURCE 0x0
+
 #define SUBSYS_I2S0     (0x1 << 0)
 #define SUBSYS_I2S1     (0x1 << 1)
 #define SUBSYS_I2S2     (0x1 << 2)
@@ -20,14 +26,14 @@
 #define AUDIO_PHY_BYPASS1		0x50
 #define AUDIO_PHY_BYPASS2		0x54
 #define SYS_CLK_CTRL			0x70
-#define I2S0_MASTER_CLK_CTRL0	0x80
-#define I2S0_MASTER_CLK_CTRL1	0x84
-#define I2S1_MASTER_CLK_CTRL0	0x90
-#define I2S1_MASTER_CLK_CTRL1	0x94
-#define I2S2_MASTER_CLK_CTRL0	0xA0
-#define I2S2_MASTER_CLK_CTRL1	0xA4
-#define I2S3_MASTER_CLK_CTRL0	0xB0
-#define I2S3_MASTER_CLK_CTRL1	0xB4
+// #define I2S0_MASTER_CLK_CTRL0	0x80
+// #define I2S0_MASTER_CLK_CTRL1	0x84
+// #define I2S1_MASTER_CLK_CTRL0	0x90
+// #define I2S1_MASTER_CLK_CTRL1	0x94
+// #define I2S2_MASTER_CLK_CTRL0	0xA0
+// #define I2S2_MASTER_CLK_CTRL1	0xA4
+// #define I2S3_MASTER_CLK_CTRL0	0xB0
+// #define I2S3_MASTER_CLK_CTRL1	0xB4
 #define SYS_LRCK_CTRL			0xC0
 
 #define I2S_FRAME_SETTING_REG	0x04
@@ -37,6 +43,44 @@
 #define I2S_CLK_CTRL1_REG		0x64
 #define I2S_RESET_REG			0x1C
 #define I2S_TX_STATUS_REG		0x48
+
+#if defined(CONFIG_ARCH_ATHENA2)
+//#define MULTI_SYNC_0				0x20
+#define MULTI_SYNC_1				0x24
+
+#define CODEC_SEL_BYPASS			0x58
+#define I2S_SYS_INT_EN				0x60
+#define I2S_SYS_INTS				0x64
+
+#define I2S0_MASTER_CLK_CTRL0	0x80
+#define I2S0_MASTER_CLK_CTRL1	0x84
+#define I2S1_MASTER_CLK_CTRL0	0x88
+#define I2S1_MASTER_CLK_CTRL1	0x8c
+#define I2S2_MASTER_CLK_CTRL0	0x90
+#define I2S2_MASTER_CLK_CTRL1	0x94
+#define I2S3_MASTER_CLK_CTRL0	0x98
+#define I2S3_MASTER_CLK_CTRL1	0x9c
+#define I2S4_MASTER_CLK_CTRL0	0xa0
+#define I2S4_MASTER_CLK_CTRL1	0xa4
+#define I2S5_MASTER_CLK_CTRL0	0xa8
+#define I2S5_MASTER_CLK_CTRL1	0xac
+
+#define DW_I2S_MODE_REG			0x0c4
+#define DW_I2S_SLAVEMODE_SOURCE	0x0c8
+#define DW_I2S_CLK_CTRL0		0x0d0
+#define DW_I2S_CLK_CTRL1		0x0d4
+
+#else
+
+#define I2S0_MASTER_CLK_CTRL0	0x80
+#define I2S0_MASTER_CLK_CTRL1	0x84
+#define I2S1_MASTER_CLK_CTRL0	0x90
+#define I2S1_MASTER_CLK_CTRL1	0x94
+#define I2S2_MASTER_CLK_CTRL0	0xA0
+#define I2S2_MASTER_CLK_CTRL1	0xA4
+#define I2S3_MASTER_CLK_CTRL0	0xB0
+#define I2S3_MASTER_CLK_CTRL1	0xB4
+#endif
 
 #ifdef CONFIG_PM_SLEEP
 struct subsys_reg_context {
@@ -73,5 +117,8 @@ void cv182x_reset_dac(void);
 void cv182x_reset_adc(void);
 void cv182xa_reset_dac(void);
 void cv182xa_reset_adc(void);
+
+void dwi2s_get_subsys(void);
+void dwi2s_set_mclk(u32 dwi2s_mode, u32 slave_source, u32 ctl0, u32 ctl1);
 
 #endif

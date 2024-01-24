@@ -49,7 +49,7 @@ static struct spi_nor_fixups no_qe_fixups = {
 };
 
 static const struct flash_info cvitek_parts[] = {
-
+#ifdef SUPPORT_3V3_NOR_FLASH
 	{ "XM25QH64A", INFO(0x207017, 0, 64 * 1024, 128,
 			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ)
 		.fixups = &no_qe_fixups
@@ -157,6 +157,9 @@ static const struct flash_info cvitek_parts[] = {
 	{ "FM25Q64", INFO(0xF83217, 0x0, 64 * 1024, 128,
 			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
 		.fixups = &sr_bit1_qe_fixups },
+	{ "FM25Q128A", INFO(0xA14018, 0x0, 64 * 1024, 256,
+			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
+		.fixups = &sr_bit1_qe_fixups },
 	{ "BY25Q128AS", INFO(0x684018, 0x0, 64 * 1024, 256,
 			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
 		.fixups = &sr_bit1_qe_fixups },
@@ -170,6 +173,23 @@ static const struct flash_info cvitek_parts[] = {
 	{ "P25Q64SH", INFO(0x856017, 0x0, 64 * 1024, 128,
 			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
 		.fixups = &sr_bit1_qe_fixups },
+#endif
+	/* 1.8V support list */
+	{ "GD25LQ128", INFO(0xc86018, 0x0, 64 * 1024, 256,
+			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
+		.fixups = &sr2_bit1_qe_fixups },
+	{ "GD25WQ128E", INFO(0xc86518, 0x0, 64 * 1024, 256,
+			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
+		.fixups = &sr2_bit1_qe_fixups },
+	{ "GD25LB512", INFO(0xc8671A, 0x0, 64 * 1024, 1024,
+			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
+		.fixups = &no_qe_fixups },
+	{ "W25Q256JW", INFO(0xef6019, 0x0, 64 * 1024, 512,
+			SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_OP)
+		.fixups = &sr2_bit1_qe_fixups },
+	{ "GD25LB256E", INFO(0xc86719, 0x0, 64 * 1024, 512,
+			SECT_4K | SPI_NOR_QUAD_OP)
+		.fixups = &no_qe_fixups },
 	{}
 
 

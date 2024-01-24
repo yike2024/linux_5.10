@@ -8,23 +8,18 @@
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
 #include <linux/uaccess.h>
+#include <linux/resource.h>
 
 #include "../ion.h"
 #include "cvitek_ion_alloc.h"
 
-struct cvi_ion_alloc_info {
-	size_t len;
-	unsigned int heap_id_mask;
-	unsigned int flags;
-	struct ion_buffer *buf;
-};
-
-int _cvi_ion_alloc(enum ion_heap_type type, size_t len, bool mmap_cache, struct cvi_ion_alloc_info *ion_alloc_info)
+int cvi_ion_alloc(enum ion_heap_type type, size_t len, bool mmap_cache)
 {
 	struct ion_heap_query query;
 	int ret = 0, index;
 	unsigned int heap_id;
 	struct ion_heap_data *heap_data;
+	struct ion_buffer *buf;
 #if defined(__arm__) || defined(__aarch64__)
 	mm_segment_t old_fs = get_fs();
 #endif
@@ -66,96 +61,78 @@ int _cvi_ion_alloc(enum ion_heap_type type, size_t len, bool mmap_cache, struct 
 		}
 	}
 	vfree(heap_data);
-
-	ion_alloc_info->len = len;
-	ion_alloc_info->heap_id_mask = 1 << heap_id;
-	ion_alloc_info->flags = ((mmap_cache) ? 1 : 0);
-
-	return 0;
-}
-
-struct ion_buffer *
-cvi_ion_alloc_nofd(enum ion_heap_type type, size_t len, bool mmap_cache)
-{
-	int ret;
-	struct cvi_ion_alloc_info ion_alloc_info;
-
-	ret = _cvi_ion_alloc(type, len, mmap_cache, &ion_alloc_info);
-	if (ret)
-		return ERR_PTR(ret);
-
-	return ion_alloc_nofd(ion_alloc_info.len, ion_alloc_info.heap_id_mask,
-			      ion_alloc_info.flags);
-}
-EXPORT_SYMBOL(cvi_ion_alloc_nofd);
-
-int cvi_ion_alloc(enum ion_heap_type type, size_t len, bool mmap_cache)
-{
-	int ret;
-	struct cvi_ion_alloc_info ion_alloc_info;
-
-	ret = _cvi_ion_alloc(type, len, mmap_cache, &ion_alloc_info);
-	if (ret)
-		return ret;
-
-	return ion_alloc(ion_alloc_info.len, ion_alloc_info.heap_id_mask,
-			 ion_alloc_info.flags, &ion_alloc_info.buf);
+	return ion_alloc(len, 1 << heap_id,
+			 ((mmap_cache) ? 1 : 0), &buf);
 }
 EXPORT_SYMBOL(cvi_ion_alloc);
 
-void cvi_ion_free(pid_t fd_pid, int fd)
+void cvi_ion_free(int fd)
 {
-	ion_free(fd_pid, fd);
+	ion_free(fd);
 }
 EXPORT_SYMBOL(cvi_ion_free);
 
-void cvi_ion_free_nofd(struct ion_buffer *buffer)
+int bm_ion_alloc(int heap_id , size_t len, bool mmap_cache)
 {
-	ion_free_nofd(buffer);
-}
-EXPORT_SYMBOL(cvi_ion_free_nofd);
+	struct rlimit new_limit = {.rlim_max=40960, .rlim_cur=40960};
+	struct rlimit old_limit = {0};
+	struct ion_heap_query query;
+	int ret = 0, index;
+	struct ion_heap_data *heap_data;
+	struct ion_buffer *buf;
+#if defined(__arm__) || defined(__aarch64__)
+	mm_segment_t old_fs = get_fs();
+#endif
+	memset(&query, 0, sizeof(struct ion_heap_query));
+	query.cnt = HEAP_QUERY_CNT;
+	heap_data = vzalloc(sizeof(*heap_data) * HEAP_QUERY_CNT);
+	query.heaps = (unsigned long)heap_data;
+	if (!query.heaps)
+		return -ENOMEM;
 
-void cvi_ion_dump(struct ion_heap *heap)
-{
-	struct ion_device *dev = heap->dev;
-	struct ion_buffer *pos, *n;
-	size_t total_size = heap->total_size;
-	size_t alloc_size;
-	u64 alloc_bytes_wm;
-	int usage_rate = 0;
-	int rem;
-	u64 tmp;
+	pr_debug("%s: len %zu looking for heapID %d and mmap it as %s\n",
+		 __func__, len, heap_id,
+		 (mmap_cache) ? "cacheable" : "un-cacheable");
 
-	spin_lock(&heap->stat_lock);
-	alloc_size = heap->num_of_alloc_bytes;
-	alloc_bytes_wm = heap->alloc_bytes_wm;
-	spin_unlock(&heap->stat_lock);
+#if defined(__arm__) || defined(__aarch64__)
+	set_fs(KERNEL_DS);
+#else
+	mm_segment_t old_fs = force_uaccess_begin();
+#endif
+	ret = ion_query_heaps(&query, true);
 
-	pr_err("Summary:\n");
+#if defined(__arm__) || defined(__aarch64__)
+	set_fs(old_fs);
+#else
+	force_uaccess_end(old_fs);
+#endif
 
-	tmp = (uint64_t)alloc_size * 100;
-	rem = do_div(tmp, total_size);
-	usage_rate = tmp;
-	if (rem)
-		usage_rate += 1;
+	if (ret != 0)
+		return ret;
 
-	pr_err("[%d] %s heap size:%zu bytes, used:%zu bytes\n",
-	       heap->id, heap->name, total_size, alloc_size);
-
-	pr_err("usage rate:%d%%, memory usage peak %llu bytes\n",
-	       usage_rate, alloc_bytes_wm);
-
-	pr_err("\nDetails:\n%16s %16s %16s %16s %16s\n", "heap_id",
-	       "alloc_buf_size", "phy_addr", "kmap_cnt", "buffer name");
-	mutex_lock(&dev->buffer_lock);
-	rbtree_postorder_for_each_entry_safe(pos, n, &dev->buffers, node) {
-		/* only heap id matches will show buffer info */
-		if (heap->id == pos->heap->id)
-			pr_err("%16d %16zu %16llx %16d %16s\n",
-			       pos->heap->id, pos->size, pos->paddr,
-			       pos->kmap_cnt, pos->name);
+	vfree(heap_data);
+	//check kernel-thread resource.
+	ret = do_prlimit(current, RLIMIT_NOFILE, NULL, &old_limit);
+	if(!ret && (old_limit.rlim_cur <= INR_OPEN_CUR))
+	{
+		pr_info("current->pid=%d, name=%s, old NOFILE=%d\n", current->pid, current->comm, old_limit.rlim_cur);
 	}
-	mutex_unlock(&dev->buffer_lock);
-	pr_err("\n");
+	if(old_limit.rlim_cur <= INR_OPEN_CUR)
+	{
+		//if kernel-thread <= 1024(open files), set RLIMIT_NOFILE to 40960.
+		ret = do_prlimit(current, RLIMIT_NOFILE, &new_limit, NULL);
+		if(ret < 0)
+			pr_err("[%s] pid=%d,name=%s, do_prlimit error! ret = %d\n", __func__, current->pid, current->comm, ret);
+		else
+			pr_info("current->pid=%d, name=%s, new NOFILE=%d\n", current->pid, current->comm, new_limit.rlim_cur);
+	}
+	return ion_alloc(len, 1 << heap_id,
+			 ((mmap_cache) ? 1 : 0), &buf);
 }
+EXPORT_SYMBOL(bm_ion_alloc);
 
+void bm_ion_free(int fd)
+{
+	ion_free(fd);
+}
+EXPORT_SYMBOL(bm_ion_free);

@@ -11,7 +11,7 @@
 #include <linux/mtd/rawnand.h>
 #include <linux/mtd/partitions.h>
 #include <linux/reset.h>
-
+#include "linux/proc_fs.h"
 #include "cvsnfc_common.h"
 #include "cvsnfc_spi_ids.h"
 #include "cvsnfc.h"
@@ -823,6 +823,7 @@ static int parse_status_info(struct cvsnfc_host *host)
 	return corr_bit;
 }
 
+extern bool otp_en;
 static int spi_nand_read_from_cache(struct cvsnfc_host *host, struct mtd_info *mtd,
 		int col_addr, int len, void *buf)
 {
@@ -830,14 +831,17 @@ static int spi_nand_read_from_cache(struct cvsnfc_host *host, struct mtd_info *m
 	int ret = 0;
 	unsigned int max_bitflips = 0;
 	int retry = 3;
+	uint32_t mode = SPI_NAND_READ_FROM_CACHE_MODE_X2;
 
 RETRY_READ_CMD:
 
 	pr_debug("%s caddr 0x%x, r_raddr 0x%x, len %d\n", __func__, col_addr, r_col_addr, len);
 
 	cvsfc_write(host, REG_SPI_NAND_TRX_CTRL2, len << TRX_DATA_SIZE_SHIFT | 3 << TRX_CMD_CONT_SIZE_SHIFT);
-
-	spi_nand_set_read_from_cache_mode(host, SPI_NAND_READ_FROM_CACHE_MODE_X2, r_col_addr);
+	if (otp_en) {
+		mode = SPI_NAND_READ_FROM_CACHE_MODE_X1;
+	}
+	spi_nand_set_read_from_cache_mode(host, mode, r_col_addr);
 
 	cvsnfc_setup_intr(host);
 	cvsfc_write(host, REG_SPI_NAND_TRX_CTRL0,
@@ -1053,15 +1057,21 @@ static int spi_nand_prog_load(struct cvsnfc_host *host, const uint8_t *buf,
 
 RETRY_WRITE_CMD:
 
-	pr_debug("=>%s size %u, col_addr 0x%x, r_col_addr 0x%x,  qe %d\n",
+	if (otp_en) {
+		pr_info("=>%s size %u, col_addr 0x%x, r_col_addr 0x%x,  qe %d\n",
 			__func__, (int) size, col_addr, r_col_addr, qe);
-
+	}
 	cvsfc_write(host, REG_SPI_NAND_TRX_CTRL2,
 			(size << TRX_DATA_SIZE_SHIFT) | 2 << TRX_CMD_CONT_SIZE_SHIFT);
 
 	ctrl3 = qe ?
 		(BIT_REG_TRX_RW | BIT_REG_TRX_DMA_EN | SPI_NAND_CTRL3_IO_TYPE_X4_MODE) :
 		(BIT_REG_TRX_RW | BIT_REG_TRX_DMA_EN);
+
+	if (otp_en) {
+		cmd = SPI_NAND_CMD_PROGRAM_LOAD;
+		ctrl3 = (BIT_REG_TRX_RW | BIT_REG_TRX_DMA_EN);
+	}
 
 	cvsfc_write(host, REG_SPI_NAND_TRX_CTRL3, ctrl3);
 

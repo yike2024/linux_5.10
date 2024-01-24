@@ -30,11 +30,17 @@
 #include <linux/uaccess.h>
 
 #if defined(CONFIG_ARCH_CVITEK)
-#define I2C0 "i2c@04000000"
-#define I2C1 "i2c@04010000"
-#define I2C2 "i2c@04020000"
-#define I2C3 "i2c@04030000"
-#define I2C4 "i2c@04040000"
+#define I2C0 "i2c@29000000"
+#define I2C1 "i2c@29010000"
+#define I2C2 "i2c@29020000"
+#define I2C3 "i2c@29030000"
+#define I2C4 "i2c@29040000"
+#define I2C5 "i2c@29050000"
+#define I2C6 "i2c@29060000"
+#define I2C7 "i2c@29070000"
+#define I2C8 "i2c@29080000"
+#define I2C9 "i2c@29090000"
+#define I2C10 "i2c@0502b000"
 #endif
 
 /*
@@ -670,18 +676,34 @@ static int i2cdev_attach_adapter(struct device *dev, void *dummy)
 	i2c_dev->dev.release = i2cdev_dev_release;
 
 #if defined(CONFIG_ARCH_CVITEK)
-	if (!strcmp(adap->dev.of_node->full_name, I2C0))
-		adap->i2c_idx = 0;
-	if (!strcmp(adap->dev.of_node->full_name, I2C1))
-		adap->i2c_idx = 1;
-	if (!strcmp(adap->dev.of_node->full_name, I2C2))
-		adap->i2c_idx = 2;
-	if (!strcmp(adap->dev.of_node->full_name, I2C3))
-		adap->i2c_idx = 3;
-	if (!strcmp(adap->dev.of_node->full_name, I2C4))
-		adap->i2c_idx = 4;
+	if(!(adap->dev.of_node)) {
+		dev_set_name(&i2c_dev->dev, "i2c-%d", adap->nr);
+	} else {
+		if (!strcmp(adap->dev.of_node->full_name, I2C0))
+			adap->i2c_idx = 0;
+		if (!strcmp(adap->dev.of_node->full_name, I2C1))
+			adap->i2c_idx = 1;
+		if (!strcmp(adap->dev.of_node->full_name, I2C2))
+			adap->i2c_idx = 2;
+		if (!strcmp(adap->dev.of_node->full_name, I2C3))
+			adap->i2c_idx = 3;
+		if (!strcmp(adap->dev.of_node->full_name, I2C4))
+			adap->i2c_idx = 4;
+		if (!strcmp(adap->dev.of_node->full_name, I2C5))
+			adap->i2c_idx = 5;
+		if (!strcmp(adap->dev.of_node->full_name, I2C6))
+			adap->i2c_idx = 6;
+		if (!strcmp(adap->dev.of_node->full_name, I2C7))
+			adap->i2c_idx = 7;
+		if (!strcmp(adap->dev.of_node->full_name, I2C8))
+			adap->i2c_idx = 8;
+		if (!strcmp(adap->dev.of_node->full_name, I2C9))
+			adap->i2c_idx = 9;
+		if (!strcmp(adap->dev.of_node->full_name, I2C10))
+			adap->i2c_idx = 10;
 
-	dev_set_name(&i2c_dev->dev, "i2c-%d", adap->i2c_idx);
+		dev_set_name(&i2c_dev->dev, "i2c-%d", adap->i2c_idx);
+	}
 #else
 	dev_set_name(&i2c_dev->dev, "i2c-%d", adap->nr);
 #endif

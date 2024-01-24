@@ -8,6 +8,23 @@
 #include <linux/of.h>
 #include <asm/smp.h>
 
+#define HARTID_MAGIC 'h'
+#define HARTID_GET_NUM _IOR(HARTID_MAGIC, 1, int)
+
+long hartid_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+	int hartid;
+	switch (cmd) {
+	case HARTID_GET_NUM:
+		hartid = boot_cpu_hartid;
+		if (copy_to_user((int __user *)arg, &hartid, sizeof(hartid)))
+		return -EFAULT;
+		break;
+	default:
+		return -ENOTTY;
+	}
+	return 0;
+}
+
 /*
  * Returns the hart ID of the given device tree node, or -ENODEV if the node
  * isn't an enabled and valid RISC-V hart node.

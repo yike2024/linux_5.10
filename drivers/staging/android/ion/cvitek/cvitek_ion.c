@@ -62,6 +62,8 @@ static struct ion_of_heap cvi_ion_heap_list[] = {
 		      ION_HEAP_TYPE_CARVEOUT, "vpp"),
 	PLATFORM_HEAP("cvitek,cma_vpp", 0,
 		      ION_HEAP_TYPE_DMA, "vpp"),
+	PLATFORM_HEAP("cvitek,carveout_vpu", 0,
+		      ION_HEAP_TYPE_CARVEOUT, "vpu"),
 	PLATFORM_HEAP("cvitek,carveout_npu", 0,
 		      ION_HEAP_TYPE_CARVEOUT, "npu"),
 	PLATFORM_HEAP("cvitek,carveout", 0,
@@ -201,11 +203,9 @@ static int cvitek_get_heap_info(struct ion_device *dev, struct cvitek_heap_info 
 			case ION_HEAP_TYPE_CARVEOUT:
 			case ION_HEAP_TYPE_CHUNK:
 			{
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4,15,0))
 				info->total_size = heap->total_size;
 				info->avail_size =
 					heap->total_size - heap->num_of_alloc_bytes;
-#endif
 				break;
 			}
 			case ION_HEAP_TYPE_SYSTEM:
@@ -278,6 +278,20 @@ exit:
 	pr_err("failed to get pa\n");
 	return 0;
 }
+
+
+void bm_flush_dcache_area(void *addr, size_t size)
+{
+	__flush_dcache_area(addr, size);
+}
+EXPORT_SYMBOL(bm_flush_dcache_area);
+
+void bm_inval_dcache_area(void *addr, size_t size)
+{
+	__inval_dcache_area(addr, size);
+}
+EXPORT_SYMBOL(bm_inval_dcache_area);
+
 #endif
 
 long cvitek_ion_ioctl(struct ion_device *dev, unsigned int cmd, unsigned long arg)
@@ -378,7 +392,7 @@ long cvitek_ion_ioctl(struct ion_device *dev, unsigned int cmd, unsigned long ar
 	case ION_IOC_CVITEK_INVALIDATE_PHY_RANGE:
 	{
 		struct cvitek_cache_range data;
-		unsigned long  va, pa;
+
 
 		if (copy_from_user(&data, (void __user *)arg, sizeof(data)))
 			return -EFAULT;
@@ -566,6 +580,7 @@ static int __init rmem_ion_setup(struct reserved_mem *rmem)
 }
 
 RESERVEDMEM_OF_DECLARE(vpp, "vpp-region", rmem_ion_setup);
+RESERVEDMEM_OF_DECLARE(vpu, "vpu-region", rmem_ion_setup);
 RESERVEDMEM_OF_DECLARE(npu, "npu-region", rmem_ion_setup);
 RESERVEDMEM_OF_DECLARE(ion, "ion-region", rmem_ion_setup);
 #endif

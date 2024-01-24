@@ -242,7 +242,14 @@ static int rtl8211f_config_init(struct phy_device *phydev)
 			"2ns RX delay was already %s (by pin-strapping RXD0 or bootloader configuration)\n",
 			val_rxdly ? "enabled" : "disabled");
 	}
-
+#ifdef CONFIG_BOARD_fpga
+	phydev->autoneg = AUTONEG_DISABLE;
+	phydev->speed = SPEED_100;
+	phydev->duplex = DUPLEX_FULL;
+#endif
+#if IS_ENABLED(CONFIG_ARCH_ATHENA2)
+	ret = phy_modify_paged_changed(phydev, 0xd04, 0x10, 0xffff,0x820B);
+#endif
 	return 0;
 }
 

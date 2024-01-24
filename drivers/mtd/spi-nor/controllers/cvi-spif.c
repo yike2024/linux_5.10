@@ -624,8 +624,10 @@ static ssize_t cvi_spif_read(struct spi_nor *nor, loff_t from, size_t len,
 #ifndef DMMR_DMA_MODE
 	struct cvi_spif *spif = nor->priv;
 #endif
-	pr_debug("from 0x%llx, len %lu\n", from, len);
 
+#ifdef CONFIG_SPI_FLASH_BAR
+	from &= 0xffffff;
+#endif
 	cvi_spif_set_memory_mode_on(nor);
 
 #ifdef DMMR_DMA_MODE

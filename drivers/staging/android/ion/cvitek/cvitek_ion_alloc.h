@@ -10,15 +10,11 @@
 
 #include "../../uapi/ion.h"
 
-#define HEAP_QUERY_CNT	5
+#define HEAP_QUERY_CNT	6
 
 int cvi_ion_alloc(enum ion_heap_type type, size_t len, bool mmap_cache);
-void cvi_ion_free(pid_t fd_pid, int fd);
-
-struct ion_buffer *
-cvi_ion_alloc_nofd(enum ion_heap_type type, size_t len, bool mmap_cache);
-void cvi_ion_free_nofd(struct ion_buffer *buffer);
-
-void cvi_ion_dump(struct ion_heap *heap);
+void cvi_ion_free(int fd);
+int bm_ion_alloc(int heap_id, size_t len, bool mmap_cache);
+void bm_ion_free(int fd);
 
 #endif /* __CVITEK_ION_ALLOC_H__ */

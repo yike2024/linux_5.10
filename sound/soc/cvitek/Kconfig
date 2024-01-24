@@ -1,6 +1,13 @@
 #
 # CVITEK Audio Sound SoC drivers
 #
+config SND_SOC_CV186X_DWU2S_ADAU1372
+	tristate "Support for the CV186x-ADAU1372 card"
+	help
+	  Say y or m if you want to add support for the analog
+	  codec ADAU1372 connect to the CVITEK CV186x boards.
+	  Then select it for built in or module.
+	  If not, please don't select it
 
 config SND_SOC_CV1835_ADAU1372
 	tristate "Support for the CV1835-ADAU1372 card"
@@ -84,6 +91,17 @@ config SND_CV1835_I2S
 	 2 channels each for play and record.
 	 Say N, if not support
 
+config SND_SOC_CV186X_DWI2S
+	tristate "CVITEK CV186x I2S Device Driver"
+	depends on CLKDEV_LOOKUP
+	select SND_SOC_GENERIC_DMAENGINE_PCM
+	help
+	 Say y or m if you want to add support for I2S driver for
+	 CVITEK CV186x DWI2S device. The device supports 4 channels
+	 each for play and record.
+	 Say N, if not support
+
+
 config SND_SOC_CV1835PDM
     tristate "CVITEK CV1835 PDM device driver"
 	depends on SND
@@ -156,6 +174,40 @@ config SND_SOC_CV1835_CONCURRENT_I2S
 	  of 1 I2S IP only has 1 FIFO, we need to bind 2 I2S IPs with 1 I/O
 
 	  If this device never do concurrent TX/RX, please don't select it
+
+config SND_SOC_CV186XDAC
+    tristate "CVITEK CV186X DAC device driver"
+	depends on SND
+	help
+	 Say y or m if you want to add support for CVITEK DAC driver for
+	 CVITEK CV186X I2S device. The device supports analog external
+	 devices (ex. headphone or speaker).
+	 Say N, if not support
+
+config SND_SOC_CV186XADC
+    tristate "CVITEK CV186X ADC device driver"
+	depends on SND
+	help
+	 Say y or m if you want to add support for CVITEK ADC driver for
+	 CVITEK CV186X I2S device. The device supports analog external
+	 devices (ex. headphone or speaker).
+	 Say N, if not support
+
+config SND_SOC_CV186X_CV186XADC
+	tristate "Support for the CV186X-CV186XAADC card"
+	help
+	 Say Y or M if you want to add support for CV186X ADC connect
+	 to CVITEK CV186X I2S device.
+	 Then select it for built in or module.
+	 Say N, if not support
+
+config SND_SOC_CV186X_CV186XDAC
+	tristate "Support for the CV186X-CV186XADAC card"
+	help
+	 Say Y or M if you want to add support for CV186X DAC connect
+	 to CVITEK CV186X I2S device.
+	 Then select it for built in or module.
+	 Say N, if not support
 
 config SND_SOC_CV183x_DUMMY_CARD
 	tristate "Support concurrent TX and RX by one I2S and the other I2S"

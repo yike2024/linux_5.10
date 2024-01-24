@@ -361,13 +361,7 @@ int ion_page_pool_shrink(struct ion_page_pool *pool, gfp_t gfp_mask,
 int ion_query_heaps(struct ion_heap_query *query, int is_kernel);
 
 #ifdef CONFIG_ION_CVITEK
-struct ion_buffer *
-ion_alloc_nofd(size_t len, unsigned int heap_id_mask, unsigned int flags);
-void ion_free(pid_t fd_pid, int fd);
-void ion_free_nofd(struct ion_buffer *buffer);
-int ion_buf_begin_cpu_access(struct ion_buffer *buffer);
-int ion_buf_end_cpu_access(struct ion_buffer *buffer);
-
+void ion_free(int fd);
 #ifdef CONFIG_ION_CARVEOUT_HEAP
 struct ion_heap *ion_carveout_heap_create(struct ion_platform_heap *heap_data);
 #else

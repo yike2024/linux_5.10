@@ -962,7 +962,6 @@ static int m88e1011_set_tunable(struct phy_device *phydev,
 static int m88e1116r_config_init(struct phy_device *phydev)
 {
 	int err;
-
 	err = genphy_soft_reset(phydev);
 	if (err < 0)
 		return err;
@@ -982,9 +981,12 @@ static int m88e1116r_config_init(struct phy_device *phydev)
 		return err;
 
 	if (phy_interface_is_rgmii(phydev)) {
+#if !defined(CONFIG_ARCH_ATHENA2_FPGA )
+		printk("not fpga\n");
 		err = m88e1121_config_aneg_rgmii_delays(phydev);
 		if (err < 0)
 			return err;
+#endif
 	}
 
 	err = genphy_soft_reset(phydev);

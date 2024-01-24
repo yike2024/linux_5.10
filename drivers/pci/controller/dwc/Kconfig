@@ -312,4 +312,25 @@ config PCIE_AL
 	  required only for DT-based platforms. ACPI platforms with the
 	  Annapurna Labs PCIe controller don't need to enable this.
 
+config PCIE_ATHENA2
+       bool "Platform bus based Athena2 PCIe Controller - Host mode"
+       depends on PCI && PCI_MSI_IRQ_DOMAIN
+       select PCIE_DW_HOST
+       select PCIE_DW_PLAT
+       help
+         Enables support for the PCIe controller.
+
+config ATHENA2_PCIE0
+       bool "Athena2 PCIe X2 controller 0"
+       select PCIE_ATHENA2
+       help
+         Say Y here to enable PCIe X2 controller 0.
+
+config ATHENA2_PCIE1
+       bool "Athena2 PCIe X2 controller 1"
+       select PCIE_ATHENA2
+       #depends on !SATA
+       help
+         Say Y here to enable PCIe X2 controller 1.
+
 endmenu

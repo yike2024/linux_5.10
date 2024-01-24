@@ -51,6 +51,9 @@
 #define STATUS_E_FAIL_MASK			(1 << 2)
 #define STATUS_WEL_MASK				(1 << 1)
 #define STATUS_OIP_MASK				(1 << 0)
+#define STATUS_SR1_L_MASK			(1 << 5)
+#define STATUS_OTP_E_MASK			(1 << 6)
+#define STATUS_OTP_L_MASK			(1 << 7)
 
 /*****************************************************************************/
 /* latest register definition */

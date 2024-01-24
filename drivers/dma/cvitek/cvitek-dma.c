@@ -1975,6 +1975,7 @@ static int dw_dma_probe(struct platform_device *pdev)
 	struct proc_dir_entry *proc_dma;
 	struct proc_dir_entry *proc_ch;
 	struct proc_dir_entry *proc_log;
+	const char *name;
 
 	dw = devm_kzalloc(dev, sizeof(*dw), GFP_KERNEL);
 	if (!dw)
@@ -2041,10 +2042,12 @@ static int dw_dma_probe(struct platform_device *pdev)
 	if (sysfs_create_group(&pdev->dev.kobj, &dma_group_attrs))
 		dev_err(&pdev->dev, "Could not register attrs for dma\n");
 
-	dev_info(dev, "CVITEK DMA Controller, %d channels, probe done!\n",
-		 dw->nr_channels);
+	name = pdev->dev.of_node->full_name;
 
-	proc_dma_folder = proc_mkdir("sysDMA", NULL);
+	dev_info(dev, "CVITEK DMA Controller, %d channels, name:%s probe done!\n",
+		 dw->nr_channels,name);
+	
+	proc_dma_folder = proc_mkdir(name, NULL);
 	if (!proc_dma_folder)
 		dev_err(&pdev->dev, "Error creating sysDMA proc folder entry\n");
 

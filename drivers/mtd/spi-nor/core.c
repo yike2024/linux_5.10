@@ -441,7 +441,6 @@ static int spansion_set_4byte_addr_mode(struct spi_nor *nor, bool enable)
 int spi_nor_write_ear(struct spi_nor *nor, u8 ear)
 {
 	int ret;
-
 	nor->bouncebuf[0] = ear;
 
 	if (nor->spimem) {
@@ -459,6 +458,57 @@ int spi_nor_write_ear(struct spi_nor *nor, u8 ear)
 
 	if (ret)
 		dev_dbg(nor->dev, "error %d writing EAR\n", ret);
+
+	return ret;
+}
+
+int adjust_bank(struct spi_nor *nor, loff_t addr)
+{
+	u8 bank_sel = addr >> 24;
+	int ret = 0;
+
+	if (nor->addr_width == 3 && nor->mtd.size > 0x1000000) {
+		if (bank_sel != nor->current_bank) {
+			pr_debug("[%s %d]====> old bank is %u, new bank is %u\n",
+					__func__, __LINE__, nor->current_bank, bank_sel);
+
+			nor->current_bank = bank_sel;
+			ret = spi_nor_write_enable(nor);
+			if (ret)
+				return ret;
+
+			ret = spi_nor_write_ear(nor, bank_sel);
+			if (ret)
+				return ret;
+		}
+	}
+	return 0;
+}
+
+/*
+ * spi_nor_read_ear() - Read Extended Address Register.
+ * @nor:	pointer to 'struct spi_nor'.
+ * Return: 0 on success, -errno otherwise.
+ */
+int spi_nor_read_ear(struct spi_nor *nor, u8 *ear)
+{
+	int ret;
+
+	if (nor->spimem) {
+		struct spi_mem_op op =
+			SPI_MEM_OP(SPI_MEM_OP_CMD(SPINOR_OP_RDEAR, 1),
+				   SPI_MEM_OP_NO_ADDR,
+				   SPI_MEM_OP_NO_DUMMY,
+				   SPI_MEM_OP_DATA_IN(1, ear, 1));
+
+		ret = spi_mem_exec_op(nor->spimem, &op);
+	} else {
+		ret = nor->controller_ops->read_reg(nor, SPINOR_OP_RDEAR,
+						    ear, 1);
+	}
+
+	if (ret)
+		dev_dbg(nor->dev, "error %d reading EAR\n", ret);
 
 	return ret;
 }
@@ -1455,6 +1505,11 @@ static int spi_nor_erase_multi_sectors(struct spi_nor *nor, u64 addr, u32 len)
 	list_for_each_entry_safe(cmd, next, &erase_list, list) {
 		nor->erase_opcode = cmd->opcode;
 		while (cmd->count) {
+#ifdef CONFIG_SPI_FLASH_BAR
+			ret = adjust_bank(nor, addr);
+			if (ret)
+				return ret;
+#endif
 			ret = spi_nor_write_enable(nor);
 			if (ret)
 				goto destroy_erase_cmd_list;
@@ -1500,7 +1555,6 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 		if (rem)
 			return -EINVAL;
 	}
-
 	addr = instr->addr;
 	len = instr->len;
 
@@ -1541,6 +1595,11 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 	/* "sector"-at-a-time erase */
 	} else if (spi_nor_has_uniform_erase(nor)) {
 		while (len) {
+#ifdef CONFIG_SPI_FLASH_BAR
+			ret = adjust_bank(nor, addr);
+			if (ret)
+				return ret;
+#endif
 			ret = spi_nor_write_enable(nor);
 			if (ret)
 				goto erase_err;
@@ -2157,6 +2216,9 @@ static int spi_nor_read(struct mtd_info *mtd, loff_t from, size_t len,
 	struct spi_nor *nor = mtd_to_spi_nor(mtd);
 	ssize_t ret;
 
+#ifdef CONFIG_SPI_FLASH_BAR
+	size_t op_len = 0;
+#endif
 	dev_dbg(nor->dev, "from 0x%08x, len %zd\n", (u32)from, len);
 
 	ret = spi_nor_lock_and_prep(nor);
@@ -2166,9 +2228,23 @@ static int spi_nor_read(struct mtd_info *mtd, loff_t from, size_t len,
 	while (len) {
 		loff_t addr = from;
 
+#ifdef CONFIG_SPI_FLASH_BAR
+		ret = adjust_bank(nor, addr);
+		if (ret)
+			return ret;
+
+		if ((addr < SZ_16M) && ((addr + len) >= SZ_16M))
+			op_len = SZ_16M - addr;
+		else
+			op_len = len;
+#endif
 		addr = spi_nor_convert_addr(nor, addr);
 
+#ifndef CONFIG_SPI_FLASH_BAR
 		ret = spi_nor_read_data(nor, addr, len, buf);
+#else
+		ret = spi_nor_read_data(nor, addr, op_len, buf);
+#endif
 		if (ret == 0) {
 			/* We shouldn't see 0-length reads */
 			ret = -EIO;
@@ -2212,6 +2288,11 @@ static int spi_nor_write(struct mtd_info *mtd, loff_t to, size_t len,
 		ssize_t written;
 		loff_t addr = to + i;
 
+#ifdef CONFIG_SPI_FLASH_BAR
+		ret = adjust_bank(nor, addr);
+		if (ret)
+			return ret;
+#endif
 		/*
 		 * If page_size is a power of two, the offset can be quickly
 		 * calculated with an AND operation. On the other cases we
@@ -3097,6 +3178,12 @@ static const struct flash_info *spi_nor_match_id(struct spi_nor *nor,
 
 static int spi_nor_set_addr_width(struct spi_nor *nor)
 {
+
+#ifdef CONFIG_SPI_FLASH_BAR
+        u8 bank_sel;
+	int ret = 0;
+#endif
+
 	if (nor->addr_width) {
 		/* already configured from SFDP */
 	} else if (nor->info->addr_width) {
@@ -3106,8 +3193,21 @@ static int spi_nor_set_addr_width(struct spi_nor *nor)
 	}
 
 	if (nor->addr_width == 3 && nor->mtd.size > 0x1000000) {
+#ifndef CONFIG_SPI_FLASH_BAR
 		/* enable 4-byte addressing if the device exceeds 16MiB */
 		nor->addr_width = 4;
+#else
+		nor->addr_width = 3;
+		//spi_nor_read_ear(nor, &bank_sel);
+		//pr_info("get bank info:%u\n", bank_sel);
+		ret = spi_nor_write_enable(nor);
+		if (ret)
+			return ret;
+		spi_nor_write_ear(nor, 0);
+		nor->current_bank = 0;
+		//spi_nor_read_ear(nor, &bank_sel);
+		//pr_info("set bank info:%u\n", bank_sel);
+#endif
 	}
 
 	if (nor->addr_width > SPI_NOR_MAX_ADDR_WIDTH) {

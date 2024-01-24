@@ -14,6 +14,8 @@
 struct cvi_i2s_subsys_dev *dev;
 void __iomem *master_reg;
 u32 current_freq;
+void __iomem *subsys_reg;
+
 
 u32 i2s_subsys_query_master(void)
 {
@@ -71,6 +73,8 @@ void cv1835_set_mclk(u32 freq)
 	struct clk *clk_sdma_aud1;
 	struct clk *clk_sdma_aud2;
 	struct clk *clk_sdma_aud3;
+	struct clk *clk_sdma_aud4;
+	struct clk *clk_sdma_aud5;
 #ifdef CONFIG_ARCH_CV183X_ASIC
 	void __iomem *gp_reg3 = ioremap(0x0300008c, 4);
 	u32 chip_id = readl(gp_reg3);
@@ -111,6 +115,18 @@ void cv1835_set_mclk(u32 freq)
 		return;
 	}
 
+	clk_sdma_aud4 = devm_clk_get(dev->dev, "clk_sdma_aud4");
+	if (IS_ERR(clk_sdma_aud4)) {
+		dev_err(dev->dev, "Get clk_sdma_aud2 failed\n");
+		return;
+	}
+
+	clk_sdma_aud5 = devm_clk_get(dev->dev, "clk_sdma_aud5");
+	if (IS_ERR(clk_sdma_aud5)) {
+		dev_err(dev->dev, "Get clk_sdma_aud3 failed\n");
+		return;
+	}
+
 	switch (freq) {
 	case CVI_16384_MHZ:
 #ifdef CONFIG_ARCH_CV183X_ASIC
@@ -119,11 +135,13 @@ void cv1835_set_mclk(u32 freq)
 			clk_set_rate(clk_a0pll, 406425600);
 		}
 #endif
-		dev_info(dev->dev, "Set clk_sdma_aud0~3 to 16384000\n");
+		dev_info(dev->dev, "Set clk_sdma_aud0~5 to 16384000\n");
 		clk_set_rate(clk_sdma_aud0, 16384000);
 		clk_set_rate(clk_sdma_aud1, 16384000);
 		clk_set_rate(clk_sdma_aud2, 16384000);
 		clk_set_rate(clk_sdma_aud3, 16384000);
+		clk_set_rate(clk_sdma_aud4, 16384000);
+		clk_set_rate(clk_sdma_aud5, 16384000);
 		break;
 	case CVI_22579_MHZ:
 #ifdef CONFIG_ARCH_CV183X_ASIC
@@ -132,11 +150,13 @@ void cv1835_set_mclk(u32 freq)
 			clk_set_rate(clk_a0pll, 406425600);
 		}
 #endif
-		dev_info(dev->dev, "Set clk_sdma_aud0~3 to 22579200\n");
+		dev_info(dev->dev, "Set clk_sdma_aud0~5 to 22579200\n");
 		clk_set_rate(clk_sdma_aud0, 22579200);
 		clk_set_rate(clk_sdma_aud1, 22579200);
 		clk_set_rate(clk_sdma_aud2, 22579200);
 		clk_set_rate(clk_sdma_aud3, 22579200);
+		clk_set_rate(clk_sdma_aud4, 22579200);
+		clk_set_rate(clk_sdma_aud5, 22579200);
 		break;
 	case CVI_24576_MHZ:
 #ifdef CONFIG_ARCH_CV183X_ASIC
@@ -145,11 +165,13 @@ void cv1835_set_mclk(u32 freq)
 			clk_set_rate(clk_a0pll, 417792000);
 		}
 #endif
-		dev_info(dev->dev, "Set clk_sdma_aud0~3 to 24576000\n");
+		dev_info(dev->dev, "Set clk_sdma_aud0~5 to 24576000\n");
 		clk_set_rate(clk_sdma_aud0, 24576000);
 		clk_set_rate(clk_sdma_aud1, 24576000);
 		clk_set_rate(clk_sdma_aud2, 24576000);
 		clk_set_rate(clk_sdma_aud3, 24576000);
+		clk_set_rate(clk_sdma_aud4, 24576000);
+		clk_set_rate(clk_sdma_aud5, 24576000);
 		break;
 	default:
 		dev_info(dev->dev, "Unrecognised freq\n");
@@ -159,6 +181,27 @@ void cv1835_set_mclk(u32 freq)
 #ifdef CONFIG_ARCH_CV183X_ASIC
 	iounmap(gp_reg3);
 #endif
+}
+
+
+void dwi2s_set_mclk(u32 dwi2s_mode, u32 slave_source, u32 ctl0, u32 ctl1)
+{
+	if (subsys_reg) {
+		writel(dwi2s_mode, subsys_reg + DW_I2S_MODE_REG);
+		writel(slave_source, subsys_reg + DW_I2S_SLAVEMODE_SOURCE);
+		writel(ctl0, subsys_reg + DW_I2S_CLK_CTRL0);
+		writel(ctl1, subsys_reg + DW_I2S_CLK_CTRL1);
+	}
+}
+
+void dwi2s_get_subsys(void)
+{
+	if (subsys_reg) {
+		pr_info("[%s][subsys:%px]dwi2s_mode:0x%x, dwi2s_slacemode_source:0x%x, clk_ctrl0:0x%x, clk_ctrl1:%x\n",
+				subsys_reg, __func__, readl(subsys_reg + DW_I2S_MODE_REG),
+				readl(subsys_reg + DW_I2S_SLAVEMODE_SOURCE),
+				readl(subsys_reg + DW_I2S_CLK_CTRL0), readl(subsys_reg + DW_I2S_CLK_CTRL1));
+	}
 }
 
 static int i2s_subsys_probe(struct platform_device *pdev)
@@ -174,6 +217,7 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	dev->subsys_base = devm_ioremap_resource(&pdev->dev, res);
+	printk("rachel: i2s subsys_base:%p\n", dev->subsys_base);
 	dev_dbg(&pdev->dev, "I2S get i2s_subsys_base=0x%p\n", dev->subsys_base);
 	if (IS_ERR(dev->subsys_base))
 		return PTR_ERR(dev->subsys_base);
@@ -184,10 +228,10 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 	dev_dbg(dev->dev, "master base is 0x%x\n", dev->master_base);
 
 	switch (dev->master_base) {
-	case 0x4110000:
+	case 0x29120000:
 		dev->master_id = 1;
 		break;
-	case 0x4120000:
+	case 0x29130000:
 		dev->master_id = 2;
 		break;
 	default:
@@ -195,6 +239,7 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 	}
 #endif
 
+	subsys_reg = dev->subsys_base;
 	master_reg = ioremap(dev->master_base, 0x100);
 	if (!master_reg)
 		dev_err(dev->dev, "%s FAILED!!\n", __func__);
@@ -208,23 +253,32 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 	pr_info("get audio clk=%d\n", audio_clk);
 	cv1835_set_mclk(audio_clk);
 
-#if (!defined(CONFIG_SND_SOC_CV1835_CONCURRENT_I2S) && !defined(CONFIG_SND_SOC_CV1835PDM))
-	/* normal operation, use I2S1 as TX and RX */
-	writel(0x7654, dev->subsys_base + SCLK_IN_SEL);
-	writel(0x7654, dev->subsys_base + FS_IN_SEL);
-	writel(0x7654, dev->subsys_base + SDI_IN_SEL);
-	writel(0x7654, dev->subsys_base + SDO_OUT_SEL);
+
+
+#if defined(CONFIG_SND_SOC_CV1835_CONCURRENT_I2S)
+
+#if defined(CONFIG_ARCH_ATHENA2)
+
+	writel(0x543210, dev->subsys_base + SCLK_IN_SEL);
+	writel(0x543210, dev->subsys_base + FS_IN_SEL);
+	writel(0x543210, dev->subsys_base + SDI_IN_SEL);
+	writel(0x543210, dev->subsys_base + SDO_OUT_SEL);
 	writel(0x0000, dev->subsys_base + MULTI_SYNC);
 	writel(0x0000, dev->subsys_base + BCLK_OEN_SEL);
 
-#elif defined(CONFIG_SND_SOC_CV1835_CONCURRENT_I2S)
+	//master
+	writel(DWI2S_MODE_REG_VAL, dev->subsys_base + DW_I2S_MODE_REG);
+	//need mclk 0x1c0
+	writel(DWI2S_CLK_CTRL0_VAL, dev->subsys_base + DW_I2S_CLK_CTRL0);
+
+#else
 	writel(0x7114, dev->subsys_base + SCLK_IN_SEL);
 	writel(0x7114, dev->subsys_base + FS_IN_SEL);
 	writel(0x7554, dev->subsys_base + SDI_IN_SEL);
 	writel(0x7664, dev->subsys_base + SDO_OUT_SEL);
 	writel(0x0000, dev->subsys_base + MULTI_SYNC);
 	writel(0x0000, dev->subsys_base + BCLK_OEN_SEL);
-
+#endif
 #elif defined(CONFIG_SND_SOC_CV1835PDM)
 	writel(0x7614, dev->subsys_base + SCLK_IN_SEL);
 	writel(0x7214, dev->subsys_base + FS_IN_SEL);
@@ -238,51 +292,116 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 #endif
 	writel(0x0002, dev->subsys_base + AUDIO_PDM_CTRL);
 
+#elif defined(CONFIG_ARCH_ATHENA2)
+
+	writel(0x543210, dev->subsys_base + SCLK_IN_SEL);
+	writel(0x543210, dev->subsys_base + FS_IN_SEL);
+	writel(0x543210, dev->subsys_base + SDI_IN_SEL);
+	writel(0x543210, dev->subsys_base + SDO_OUT_SEL);
+	writel(0x0000, dev->subsys_base + MULTI_SYNC);
+	writel(0x0000, dev->subsys_base + BCLK_OEN_SEL);
+
+	//master
+	writel(DWI2S_MODE_REG_VAL, dev->subsys_base + DW_I2S_MODE_REG);
+	//need mclk 0x1c0
+	writel(DWI2S_CLK_CTRL0_VAL, dev->subsys_base + DW_I2S_CLK_CTRL0);
+
+#else
+	/* normal operation, use I2S1 as TX and RX */
+	writel(0x7654, dev->subsys_base + SCLK_IN_SEL);
+	writel(0x7654, dev->subsys_base + FS_IN_SEL);
+	writel(0x7654, dev->subsys_base + SDI_IN_SEL);
+	writel(0x7654, dev->subsys_base + SDO_OUT_SEL);
+	writel(0x0000, dev->subsys_base + MULTI_SYNC);
+	writel(0x0000, dev->subsys_base + BCLK_OEN_SEL);
+
 #endif
 
 	return 0;
 }
+
+
 
 #define CV182X_DAC_RESET	0xF7FFFFFF
 #define CV182X_ADC_RESET	0xDFFFFFFF
 #define CV182XA_DAC_RESET	0xF7FFFFFF
 #define CV182XA_ADC_RESET	0xDFFFFFFF
 
+#define CV186X_DAC0_RESET	0xFFFBFFFF
+#define CV186X_DAC1_RESET	0xFFDFFFFF
+#define CV186X_ADC0_RESET	0xFFEFFFFF
+#define CV186X_ADC1_RESET	0xFF7FFFFF
+
+
 /* while cv182x codecs transfer CIC between 64 and 128, need to reset codec first */
 void cv182x_reset_dac(void)
 {
+#ifndef CONFIG_ARCH_ATHENA2
 	void __iomem *reset_reg = ioremap(0x03003008, 4);
 
 	writel((readl(reset_reg) & CV182X_DAC_RESET), reset_reg);
 	writel((readl(reset_reg) | ~CV182X_DAC_RESET), reset_reg);
 	iounmap(reset_reg);
+#else
+//add a2 dac
+#endif
 }
 
 void cv182x_reset_adc(void)
 {
+#ifndef CONFIG_ARCH_ATHENA2
 	void __iomem *reset_reg = ioremap(0x03003008, 4);
 
 	writel((readl(reset_reg) & CV182X_ADC_RESET), reset_reg);
 	writel((readl(reset_reg) | ~CV182X_ADC_RESET), reset_reg);
 	iounmap(reset_reg);
+#else
+//add a2 adc
+#endif
 }
 
 void cv182xa_reset_dac(void)
 {
+#ifndef CONFIG_ARCH_ATHENA2
 	void __iomem *reset_reg = ioremap(0x03003008, 4);
 
 	writel((readl(reset_reg) & CV182XA_DAC_RESET), reset_reg);
 	writel((readl(reset_reg) | ~CV182XA_DAC_RESET), reset_reg);
 	iounmap(reset_reg);
+#else
+
+	void __iomem *reset_reg = ioremap(0x28103004, 4);
+
+	writel((readl(reset_reg) & CV186X_DAC0_RESET), reset_reg);
+	writel((readl(reset_reg) | ~CV186X_DAC0_RESET), reset_reg);
+
+	writel((readl(reset_reg) & CV186X_DAC1_RESET), reset_reg);
+	writel((readl(reset_reg) | ~CV186X_DAC1_RESET), reset_reg);
+
+	iounmap(reset_reg);
+
+#endif
 }
 
 void cv182xa_reset_adc(void)
 {
+#ifndef CONFIG_ARCH_ATHENA2
 	void __iomem *reset_reg = ioremap(0x03003008, 4);
 
 	writel((readl(reset_reg) & CV182XA_ADC_RESET), reset_reg);
 	writel((readl(reset_reg) | ~CV182XA_ADC_RESET), reset_reg);
 	iounmap(reset_reg);
+
+#else
+	void __iomem *reset_reg = ioremap(0x28103004, 4);
+
+	writel((readl(reset_reg) & CV186X_ADC0_RESET), reset_reg);
+	writel((readl(reset_reg) | ~CV186X_ADC0_RESET), reset_reg);
+
+	writel((readl(reset_reg) & CV186X_ADC1_RESET), reset_reg);
+	writel((readl(reset_reg) | ~CV186X_ADC1_RESET), reset_reg);
+	iounmap(reset_reg);
+#endif
 }
 
 static const struct of_device_id i2s_subsys_id_match[] = {

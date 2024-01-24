@@ -69,3 +69,9 @@ extra-y					+= $(head-y) vmlinux.lds
 ifeq ($(CONFIG_DEBUG_EFI),y)
 AFLAGS_head.o += -DVMLINUX_PATH="\"$(realpath $(objtree)/vmlinux)\""
 endif
+
+ifeq ($(CONFIG_ARCH_CVITEK_CHIP),"CV186AH")
+EXTRA_CFLAGS += -DCHIP_CV186AH
+else
+EXTRA_CFLAGS += -DCHIP_BM1688
+endif
