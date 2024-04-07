@@ -312,4 +312,25 @@ config PCIE_AL
 	  required only for DT-based platforms. ACPI platforms with the
 	  Annapurna Labs PCIe controller don't need to enable this.
 
+config PCIE_CV186X
+       bool "Platform bus based CV186X PCIe Controller - Host mode"
+       depends on PCI && PCI_MSI_IRQ_DOMAIN
+       select PCIE_DW_HOST
+       select PCIE_DW_PLAT
+       help
+         Enables support for the PCIe controller.
+
+config CV186X_PCIE0
+       bool "CV186X PCIe X2 controller 0"
+       select PCIE_CV186X
+       help
+         Say Y here to enable PCIe X2 controller 0.
+
+config CV186X_PCIE1
+       bool "CV186X PCIe X2 controller 1"
+       select PCIE_CV186X
+       #depends on !SATA
+       help
+         Say Y here to enable PCIe X2 controller 1.
+
 endmenu

@@ -66,7 +66,7 @@ MODULE_PARM_DESC(phyaddr, "Physical device address");
 #define STMMAC_TX_THRESH(x)	((x)->dma_tx_size / 4)
 #define STMMAC_RX_THRESH(x)	((x)->dma_rx_size / 4)
 
-static int flow_ctrl = FLOW_AUTO;
+static int flow_ctrl = FLOW_OFF;
 module_param(flow_ctrl, int, 0644);
 MODULE_PARM_DESC(flow_ctrl, "Flow control ability [on/off]");
 
@@ -800,8 +800,10 @@ static void stmmac_validate(struct phylink_config *config,
 	phylink_set(mac_supported, 1000baseKX_Full);
 
 	phylink_set(mac_supported, Autoneg);
-	phylink_set(mac_supported, Pause);
-	phylink_set(mac_supported, Asym_Pause);
+	if (flow_ctrl != FLOW_OFF) {
+		phylink_set(mac_supported, Pause);
+		phylink_set(mac_supported, Asym_Pause);
+	}
 	phylink_set_port_modes(mac_supported);
 
 	/* Cut down 1G if asked to */
@@ -4939,7 +4941,7 @@ int stmmac_dvr_probe(struct device *device,
 		dev_info(priv->device, "TSO feature enabled\n");
 	}
 
-	if (priv->dma_cap.sphen) {
+	if (priv->dma_cap.sphen && !priv->plat->sph_disable) {
 		ndev->hw_features |= NETIF_F_GRO;
 		priv->sph = true;
 		dev_info(priv->device, "SPH feature enabled\n");

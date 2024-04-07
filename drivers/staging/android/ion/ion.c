@@ -23,11 +23,42 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
+#include <trace/events/kmem.h>
+#ifdef CONFIG_COMPAT
+#include "compat_ion.h"
+#endif
 
 #include "ion.h"
-
+#ifdef CONFIG_ION_CVITEK
+extern void cvi_ion_create_debug_info(struct ion_heap *heap);
+#endif
 static struct ion_device *internal_dev;
 static int heap_id;
+
+/* this function should only be called while dev->lock is held */
+static void ion_buffer_add(struct ion_device *dev, struct ion_buffer *buffer)
+{
+	struct rb_node **p = &dev->buffers.rb_node;
+	struct rb_node *parent = NULL;
+	struct ion_buffer *entry;
+
+	while (*p) {
+		parent = *p;
+		entry = rb_entry(parent, struct ion_buffer, node);
+
+		if (buffer < entry) {
+			p = &(*p)->rb_left;
+		} else if (buffer > entry) {
+			p = &(*p)->rb_right;
+		} else {
+			pr_err("%s: buffer already found.", __func__);
+			BUG();
+		}
+	}
+
+	rb_link_node(&buffer->node, parent, p);
+	rb_insert_color(&buffer->node, &dev->buffers);
+}
 
 /* this function should only be called while dev->lock is held */
 static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
@@ -36,6 +67,7 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 					    unsigned long flags)
 {
 	struct ion_buffer *buffer;
+	u64 pre_num_of_alloc_bytes;
 	int ret;
 
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
@@ -66,6 +98,11 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	}
 
 	spin_lock(&heap->stat_lock);
+	pre_num_of_alloc_bytes = heap->num_of_alloc_bytes;
+	spin_unlock(&heap->stat_lock);
+	trace_ion_heap_grow(heap->name, len, pre_num_of_alloc_bytes);
+
+	spin_lock(&heap->stat_lock);
 	heap->num_of_buffers++;
 	heap->num_of_alloc_bytes += len;
 	if (heap->num_of_alloc_bytes > heap->alloc_bytes_wm)
@@ -74,6 +111,9 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 
 	INIT_LIST_HEAD(&buffer->attachments);
 	mutex_init(&buffer->lock);
+	mutex_lock(&dev->buffer_lock);
+	ion_buffer_add(dev, buffer);
+	mutex_unlock(&dev->buffer_lock);
 	return buffer;
 
 err1:
@@ -85,12 +125,21 @@ err2:
 
 void ion_buffer_destroy(struct ion_buffer *buffer)
 {
+	u64 pre_num_of_alloc_bytes;
+
 	if (buffer->kmap_cnt > 0) {
 		pr_warn_once("%s: buffer still mapped in the kernel\n",
 			     __func__);
 		buffer->heap->ops->unmap_kernel(buffer->heap, buffer);
 	}
 	buffer->heap->ops->free(buffer);
+
+	spin_lock(&buffer->heap->stat_lock);
+	pre_num_of_alloc_bytes = buffer->heap->num_of_alloc_bytes;
+	spin_unlock(&buffer->heap->stat_lock);
+	trace_ion_heap_shrink(buffer->heap->name, buffer->size,
+			      pre_num_of_alloc_bytes);
+
 	spin_lock(&buffer->heap->stat_lock);
 	buffer->heap->num_of_buffers--;
 	buffer->heap->num_of_alloc_bytes -= buffer->size;
@@ -102,6 +151,11 @@ void ion_buffer_destroy(struct ion_buffer *buffer)
 static void _ion_buffer_destroy(struct ion_buffer *buffer)
 {
 	struct ion_heap *heap = buffer->heap;
+	struct ion_device *dev = buffer->dev;
+
+	mutex_lock(&dev->buffer_lock);
+	rb_erase(&buffer->node, &dev->buffers);
+	mutex_unlock(&dev->buffer_lock);
 
 	if (heap->flags & ION_HEAP_FLAG_DEFER_FREE)
 		ion_heap_freelist_add(heap, buffer);
@@ -275,6 +329,17 @@ static void ion_dma_buf_release(struct dma_buf *dmabuf)
 	_ion_buffer_destroy(buffer);
 }
 
+static void *ion_dma_buf_vmap(struct dma_buf *dmabuf)
+{
+	struct ion_buffer *buffer = dmabuf->priv;
+
+	return buffer->vaddr;
+}
+
+static void ion_dma_buf_vunmap(struct dma_buf *dmabuf, void *ptr)
+{
+}
+
 static int ion_dma_buf_begin_cpu_access(struct dma_buf *dmabuf,
 					enum dma_data_direction direction)
 {
@@ -334,9 +399,14 @@ static const struct dma_buf_ops dma_buf_ops = {
 	.detach = ion_dma_buf_detach,
 	.begin_cpu_access = ion_dma_buf_begin_cpu_access,
 	.end_cpu_access = ion_dma_buf_end_cpu_access,
+	.vmap = ion_dma_buf_vmap,
+	.vunmap = ion_dma_buf_vunmap,
 };
-
-static int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
+#ifdef CONFIG_ION_CVITEK
+int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags, struct ion_buffer **buf)
+#else
+int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
+#endif
 {
 	struct ion_device *dev = internal_dev;
 	struct ion_buffer *buffer = NULL;
@@ -390,10 +460,15 @@ static int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
 	if (fd < 0)
 		dma_buf_put(dmabuf);
 
+#ifdef CONFIG_ION_CVITEK
+	if (buffer && buf)
+		*buf = buffer;
+#endif
+
 	return fd;
 }
 
-static int ion_query_heaps(struct ion_heap_query *query)
+int ion_query_heaps(struct ion_heap_query *query, int is_kernel)
 {
 	struct ion_device *dev = internal_dev;
 	struct ion_heap_data __user *buffer = u64_to_user_ptr(query->heaps);
@@ -416,14 +491,19 @@ static int ion_query_heaps(struct ion_heap_query *query)
 	max_cnt = query->cnt;
 
 	plist_for_each_entry(heap, &dev->heaps, node) {
-		strncpy(hdata.name, heap->name, MAX_HEAP_NAME);
+		if(heap->name)
+			strncpy(hdata.name, heap->name, MAX_HEAP_NAME);
 		hdata.name[sizeof(hdata.name) - 1] = '\0';
 		hdata.type = heap->type;
 		hdata.heap_id = heap->id;
 
-		if (copy_to_user(&buffer[cnt], &hdata, sizeof(hdata))) {
-			ret = -EFAULT;
-			goto out;
+		if (is_kernel) {
+			buffer[cnt] = hdata;
+		} else {
+			if (copy_to_user(&buffer[cnt], &hdata, sizeof(hdata))) {
+				ret = -EFAULT;
+				goto out;
+			}
 		}
 
 		cnt++;
@@ -441,6 +521,7 @@ out:
 union ion_ioctl_arg {
 	struct ion_allocation_data allocation;
 	struct ion_heap_query query;
+	struct ion_custom_data custom;
 };
 
 static int validate_ioctl_arg(unsigned int cmd, union ion_ioctl_arg *arg)
@@ -463,6 +544,10 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int ret = 0;
 	union ion_ioctl_arg data;
+	struct ion_device *dev = container_of(filp->private_data, struct ion_device, dev);
+#ifdef CONFIG_ION_CVITEK
+	struct ion_buffer *buffer;
+#endif
 
 	if (_IOC_SIZE(cmd) > sizeof(data))
 		return -EINVAL;
@@ -488,19 +573,55 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case ION_IOC_ALLOC:
 	{
 		int fd;
+#ifdef CONFIG_ION_CVITEK
+		char *name = vmalloc(MAX_ION_BUFFER_NAME);
 
 		fd = ion_alloc(data.allocation.len,
 			       data.allocation.heap_id_mask,
+			       data.allocation.flags, &buffer);
+#else
+		fd = ion_alloc(data.allocation.len,
+			       data.allocation.heap_id_mask,
 			       data.allocation.flags);
+#endif
 		if (fd < 0)
 			return fd;
 
 		data.allocation.fd = fd;
+#ifdef CONFIG_ION_CVITEK
+		data.allocation.paddr = buffer->paddr;
+		strncpy(name, data.allocation.name, MAX_ION_BUFFER_NAME);
+		buffer->name = name;
+#endif
+		break;
+	}
+	case ION_IOC_ALLOC_LEGACY:
+	{
+		int fd;
+#ifdef CONFIG_ION_CVITEK
+		fd = ion_alloc(data.allocation.len,
+			       data.allocation.heap_id_mask,
+			       data.allocation.flags, &buffer);
+#else
+		fd = ion_alloc(data.allocation.len,
+			       data.allocation.heap_id_mask,
+			       data.allocation.flags);
+#endif
+		if (fd < 0)
+			return fd;
 
+		data.allocation.fd = fd;
+		data.allocation.paddr = buffer->paddr;
 		break;
 	}
 	case ION_IOC_HEAP_QUERY:
-		ret = ion_query_heaps(&data.query);
+		ret = ion_query_heaps(&data.query, false);
+		break;
+	case ION_IOC_CUSTOM:
+		if (!dev->custom_ioctl)
+			return -ENOTTY;
+		ret = dev->custom_ioctl(dev, data.custom.cmd,
+					data.custom.arg);
 		break;
 	default:
 		return -ENOTTY;
@@ -516,7 +637,9 @@ static long ion_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 static const struct file_operations ion_fops = {
 	.owner          = THIS_MODULE,
 	.unlocked_ioctl = ion_ioctl,
-	.compat_ioctl	= compat_ptr_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = compat_ion_ioctl,
+#endif
 };
 
 static int debug_shrink_set(void *data, u64 val)
@@ -614,6 +737,9 @@ void ion_device_add_heap(struct ion_heap *heap)
 	 */
 	plist_node_init(&heap->node, -heap->id);
 	plist_add(&heap->node, &dev->heaps);
+#ifdef CONFIG_ION_CVITEK
+	cvi_ion_create_debug_info(heap);
+#endif
 
 	dev->heap_cnt++;
 	up_write(&dev->lock);
@@ -641,9 +767,20 @@ static int ion_device_create(void)
 	}
 
 	idev->debug_root = debugfs_create_dir("ion", NULL);
+	idev->buffers = RB_ROOT;
+	mutex_init(&idev->buffer_lock);
 	init_rwsem(&idev->lock);
 	plist_head_init(&idev->heaps);
 	internal_dev = idev;
 	return 0;
 }
 subsys_initcall(ion_device_create);
+#ifdef CONFIG_ION_CVITEK
+#include <linux/syscalls.h>
+void ion_free(int fd)
+{
+	ksys_close(fd);
+}
+EXPORT_SYMBOL(ion_free);
+
+#endif

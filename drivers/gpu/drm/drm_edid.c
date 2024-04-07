@@ -4899,8 +4899,11 @@ static void drm_parse_hdmi_forum_vsdb(struct drm_connector *connector,
 			scdc->scrambling.supported = true;
 
 			/* Few sinks support scrambling for clocks < 340M */
-			if ((hf_vsdb[6] & 0x8))
+			if ((hf_vsdb[6] & 0x8)){
+#if 0
 				scdc->scrambling.low_rates = true;
+#endif
+			}
 		}
 	}
 

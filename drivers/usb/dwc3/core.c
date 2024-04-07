@@ -1538,6 +1538,21 @@ static int dwc3_probe(struct platform_device *pdev)
 
 	pm_runtime_forbid(dev);
 
+	if (!dev->dma_mask)
+		dev->dma_mask = dev->coherent_dma_mask;
+
+	ret = dma_set_coherent_mask(dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_err(dwc->dev, "can't set coherent DMA mask: %d\n", ret);
+		return ret;
+	}
+
+	ret = dma_set_mask(dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_err(dwc->dev, "can't set DMA mask: %d\n", ret);
+		return ret;
+	}
+
 	ret = dwc3_alloc_event_buffers(dwc, DWC3_EVENT_BUFFERS_SIZE);
 	if (ret) {
 		dev_err(dwc->dev, "failed to allocate event buffers\n");

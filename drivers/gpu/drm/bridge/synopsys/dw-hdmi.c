@@ -1,11 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
-/*
- * DesignWare High-Definition Multimedia Interface (HDMI) driver
- *
- * Copyright (C) 2013-2015 Mentor Graphics Inc.
- * Copyright (C) 2011-2013 Freescale Semiconductor, Inc.
- * Copyright (C) 2010, Guennadi Liakhovetski <g.liakhovetski@gmx.de>
- */
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/err.h>
@@ -96,6 +88,34 @@ static const u16 csc_coeff_rgb_full_to_rgb_limited[3][4] = {
 	{ 0x1b7c, 0x0000, 0x0000, 0x0020 },
 	{ 0x0000, 0x1b7c, 0x0000, 0x0020 },
 	{ 0x0000, 0x0000, 0x1b7c, 0x0020 }
+};
+
+static struct phy_config phy316[] = {
+	{0, 8, HDMI_14, 0x0003, 0x0283, 0x0628, LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0003, 0x0285, 0x0228, LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0002, 0x1183, 0x0614, LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0002, 0x1142, 0x0214, LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0001, 0x20C0, 0x060A, LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0001, 0x2080, 0x020A, LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0001, 0x2080, 0x020A, LT_3_40GBPS},
+	{0, 8, HDMI_14, 0x0000, 0x3040, 0x0605, LT_3_40GBPS},
+	{0, 8, HDMI_14, 0x0000, 0x3041, 0x0205, LT_3_40GBPS},
+	{0, 8, HDMI_20, 0x0640, 0x3041, 0x0205, GT_3_40GBPS},
+	{0, 8, HDMI_20, 0x0640, 0x3080, 0x0005, GT_3_40GBPS},
+};
+
+static struct phy_config phy316_se9[] = {
+	{0, 8, HDMI_14, 0x0003, 0x0283, 0x0628, SE9_LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0003, 0x0285, 0x0228, SE9_LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0002, 0x1183, 0x0614, SE9_LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0002, 0x1142, 0x0214, SE9_LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0001, 0x20C0, 0x060A, SE9_LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0001, 0x2080, 0x020A, SE9_LT_1_65GBPS},
+	{0, 8, HDMI_14, 0x0001, 0x2080, 0x020A, SE9_LT_3_40GBPS},
+	{0, 8, HDMI_14, 0x0000, 0x3040, 0x0605, SE9_LT_3_40GBPS},
+	{0, 8, HDMI_14, 0x0000, 0x3041, 0x0205, SE9_LT_3_40GBPS},
+	{0, 8, HDMI_20, 0x0640, 0x3041, 0x0205, SE9_GT_3_40GBPS},
+	{0, 8, HDMI_20, 0x0640, 0x3080, 0x0005, SE9_GT_3_40GBPS},
 };
 
 struct hdmi_vmode {
@@ -206,6 +226,8 @@ struct dw_hdmi {
 	hdmi_codec_plugged_cb plugged_cb;
 	struct device *codec_dev;
 	enum drm_connector_status last_connector_result;
+
+	bool is_se9;
 };
 
 #define HDMI_IH_PHY_STAT0_RX_SENSE \
@@ -216,17 +238,96 @@ struct dw_hdmi {
 	(HDMI_PHY_RX_SENSE0 | HDMI_PHY_RX_SENSE1 | \
 	 HDMI_PHY_RX_SENSE2 | HDMI_PHY_RX_SENSE3)
 
+#define _reg_read(addr) readl((void __iomem *)addr)
+#define _reg_write(addr, data) writel(data, (void __iomem *)addr)
+
+
+static DEFINE_RAW_SPINLOCK(__io_lock);
+
+static void _reg_write_mask(void __iomem *addr, u32 mask, u32 data)
+{
+	unsigned long flags;
+	u32 value;
+
+	raw_spin_lock_irqsave(&__io_lock, flags);
+	value = readl_relaxed(addr) & ~mask;
+	value |= (data & mask);
+	writel(value, addr);
+	raw_spin_unlock_irqrestore(&__io_lock, flags);
+}
+
+u8 is_equal(u32 a, u32 b){
+	return (a == b);
+}
+
+struct phy_config * phy316_get_configs(struct dw_hdmi *hdmi, unsigned long mpixelclock, u16 width, u16 height,
+					color_depth_t color, pixel_repetition_t pixel)
+{
+
+	DRM_DEBUG_DRIVER("mpixelclock:%u, width:%d, height:%d, color:%d, pixel:%d\n", mpixelclock, width, height, color, pixel);
+
+	if(hdmi->is_se9) {
+		if(mpixelclock >= 25175 && mpixelclock < 36000)
+			return &(phy316_se9[0]);
+		else if(mpixelclock >= 36000 && mpixelclock < 49500)
+			return &(phy316_se9[1]);
+		else if(mpixelclock >= 49500 && mpixelclock < 72000)
+			return &(phy316_se9[2]);
+		else if(mpixelclock >= 72000 && mpixelclock < 94500)
+			return &(phy316_se9[3]);
+		else if(mpixelclock >= 94500 && mpixelclock < 144000)
+			return &(phy316_se9[4]);
+		else if(mpixelclock >= 144000 && mpixelclock < 175500)
+			return &(phy316_se9[5]);
+		else if(mpixelclock >= 175500 && mpixelclock < 185625)
+			return &(phy316_se9[6]);
+		else if(mpixelclock >= 185625 && mpixelclock < 288000)
+			return &(phy316_se9[7]);
+		else if(mpixelclock >= 288000 && mpixelclock < 348500)
+			return &(phy316_se9[8]);
+		else if(mpixelclock >= 348500 && mpixelclock < 475200)
+			return &(phy316_se9[9]);
+		else if(mpixelclock >= 475200 && mpixelclock <= 594000)
+			return &(phy316_se9[10]);
+	} else {
+		if(mpixelclock >= 25175 && mpixelclock < 36000)
+			return &(phy316[0]);
+		else if(mpixelclock >= 36000 && mpixelclock < 49500)
+			return &(phy316[1]);
+		else if(mpixelclock >= 49500 && mpixelclock < 72000)
+			return &(phy316[2]);
+		else if(mpixelclock >= 72000 && mpixelclock < 94500)
+			return &(phy316[3]);
+		else if(mpixelclock >= 94500 && mpixelclock < 144000)
+			return &(phy316[4]);
+		else if(mpixelclock >= 144000 && mpixelclock < 175500)
+			return &(phy316[5]);
+		else if(mpixelclock >= 175500 && mpixelclock < 185625)
+			return &(phy316[6]);
+		else if(mpixelclock >= 185625 && mpixelclock < 288000)
+			return &(phy316[7]);
+		else if(mpixelclock >= 288000 && mpixelclock < 348500)
+			return &(phy316[8]);
+		else if(mpixelclock >= 348500 && mpixelclock < 475200)
+			return &(phy316[9]);
+		else if(mpixelclock >= 475200 && mpixelclock <= 594000)
+			return &(phy316[10]);
+	}
+
+	return NULL;
+}
+
 static inline void hdmi_writeb(struct dw_hdmi *hdmi, u8 val, int offset)
 {
-	regmap_write(hdmi->regm, offset << hdmi->reg_shift, val);
+	// regmap_write(hdmi->regm, offset << hdmi->reg_shift, val);
+	_reg_write(hdmi->regs + (offset << 2), val);
 }
 
 static inline u8 hdmi_readb(struct dw_hdmi *hdmi, int offset)
 {
 	unsigned int val = 0;
-
-	regmap_read(hdmi->regm, offset << hdmi->reg_shift, &val);
-
+	// regmap_read(hdmi->regm, offset << hdmi->reg_shift, &val);
+	val = (unsigned int)_reg_read(hdmi->regs + (offset << 2));
 	return val;
 }
 
@@ -254,7 +355,8 @@ EXPORT_SYMBOL_GPL(dw_hdmi_set_plugged_cb);
 
 static void hdmi_modb(struct dw_hdmi *hdmi, u8 data, u8 mask, unsigned reg)
 {
-	regmap_update_bits(hdmi->regm, reg << hdmi->reg_shift, mask, data);
+	// regmap_update_bits(hdmi->regm, reg << hdmi->reg_shift, mask, data);
+	_reg_write_mask(hdmi->regs + (reg << 2), mask, data);
 }
 
 static void hdmi_mask_writeb(struct dw_hdmi *hdmi, u8 data, unsigned int reg,
@@ -1396,6 +1498,7 @@ static void dw_hdmi_phy_power_off(struct dw_hdmi *hdmi)
 		dev_dbg(hdmi->dev, "PHY powered down in %u iterations\n", i);
 
 	dw_hdmi_phy_gen2_pddq(hdmi, 1);
+
 }
 
 static int dw_hdmi_phy_power_on(struct dw_hdmi *hdmi)
@@ -1443,50 +1546,20 @@ static int hdmi_phy_configure_dwc_hdmi_3d_tx(struct dw_hdmi *hdmi,
 		const struct dw_hdmi_plat_data *pdata,
 		unsigned long mpixelclock)
 {
-	const struct dw_hdmi_mpll_config *mpll_config = pdata->mpll_cfg;
-	const struct dw_hdmi_curr_ctrl *curr_ctrl = pdata->cur_ctr;
-	const struct dw_hdmi_phy_config *phy_config = pdata->phy_config;
+	struct phy_config * config = NULL;
+	config = phy316_get_configs(hdmi, mpixelclock / 1000, hdmi->previous_mode.hdisplay, hdmi->previous_mode.vdisplay,
+								COLOR_DEPTH_8, PIXEL_REPETITION_OFF);
+	if(!config){
+		dev_err(hdmi->dev, "OUTPUT SIZE OR CLOCK IS NOT SUPPORTED\n");
+		return -ETIMEDOUT;
+	}
 
-	/* TOFIX Will need 420 specific PHY configuration tables */
-
-	/* PLL/MPLL Cfg - always match on final entry */
-	for (; mpll_config->mpixelclock != ~0UL; mpll_config++)
-		if (mpixelclock <= mpll_config->mpixelclock)
-			break;
-
-	for (; curr_ctrl->mpixelclock != ~0UL; curr_ctrl++)
-		if (mpixelclock <= curr_ctrl->mpixelclock)
-			break;
-
-	for (; phy_config->mpixelclock != ~0UL; phy_config++)
-		if (mpixelclock <= phy_config->mpixelclock)
-			break;
-
-	if (mpll_config->mpixelclock == ~0UL ||
-	    curr_ctrl->mpixelclock == ~0UL ||
-	    phy_config->mpixelclock == ~0UL)
-		return -EINVAL;
-
-	dw_hdmi_phy_i2c_write(hdmi, mpll_config->res[0].cpce,
-			      HDMI_3D_TX_PHY_CPCE_CTRL);
-	dw_hdmi_phy_i2c_write(hdmi, mpll_config->res[0].gmp,
-			      HDMI_3D_TX_PHY_GMPCTRL);
-	dw_hdmi_phy_i2c_write(hdmi, curr_ctrl->curr[0],
-			      HDMI_3D_TX_PHY_CURRCTRL);
-
-	dw_hdmi_phy_i2c_write(hdmi, 0, HDMI_3D_TX_PHY_PLLPHBYCTRL);
-	dw_hdmi_phy_i2c_write(hdmi, HDMI_3D_TX_PHY_MSM_CTRL_CKO_SEL_FB_CLK,
-			      HDMI_3D_TX_PHY_MSM_CTRL);
-
-	dw_hdmi_phy_i2c_write(hdmi, phy_config->term, HDMI_3D_TX_PHY_TXTERM);
-	dw_hdmi_phy_i2c_write(hdmi, phy_config->sym_ctr,
-			      HDMI_3D_TX_PHY_CKSYMTXCTRL);
-	dw_hdmi_phy_i2c_write(hdmi, phy_config->vlev_ctr,
-			      HDMI_3D_TX_PHY_VLEVCTRL);
-
-	/* Override and disable clock termination. */
-	dw_hdmi_phy_i2c_write(hdmi, HDMI_3D_TX_PHY_CKCALCTRL_OVERRIDE,
-			      HDMI_3D_TX_PHY_CKCALCTRL);
+	dw_hdmi_phy_i2c_write(hdmi, config->oppllcfg, OPMODE_PLLCFG);
+	dw_hdmi_phy_i2c_write(hdmi, config->pllcurrctrl, PLLCURRCTRL);
+	dw_hdmi_phy_i2c_write(hdmi, config->pllgmpctrl, PLLDIVCTRL);
+	dw_hdmi_phy_i2c_write(hdmi, config->txterm, TXTERM);
+	dw_hdmi_phy_i2c_write(hdmi, config->vlevctrl, VLEVCTRL);
+	dw_hdmi_phy_i2c_write(hdmi, config->cksymtxctrl, CKSYMTXCTRL);
 
 	return 0;
 }
@@ -1519,6 +1592,7 @@ static int hdmi_phy_configure(struct dw_hdmi *hdmi,
 		ret = pdata->configure_phy(hdmi, pdata->priv_data, mpixelclock);
 	else
 		ret = phy->configure(hdmi, pdata, mpixelclock);
+
 	if (ret) {
 		dev_err(hdmi->dev, "PHY configuration failed (clock %lu)\n",
 			mpixelclock);
@@ -1885,6 +1959,7 @@ static void hdmi_av_composer(struct dw_hdmi *hdmi,
 	dev_dbg(hdmi->dev, "final tmdsclock = %d\n", vmode->mtmdsclock);
 
 	/* Set up HDMI_FC_INVIDCONF */
+
 	inv_val = (hdmi->hdmi_data.hdcp_enable ||
 		   (dw_hdmi_support_scdc(hdmi, display) &&
 		    (vmode->mtmdsclock > HDMI14_MAX_TMDSCLK ||
@@ -1972,6 +2047,7 @@ static void hdmi_av_composer(struct dw_hdmi *hdmi,
 				min_t(u8, bytes, SCDC_MIN_SOURCE_VERSION));
 
 			/* Enabled Scrambling in the Sink */
+
 			drm_scdc_set_scrambling(hdmi->ddc, 1);
 
 			/*
@@ -1981,9 +2057,11 @@ static void hdmi_av_composer(struct dw_hdmi *hdmi,
 			 * time, before the required mc_swrstzreq.tmdsswrst_req
 			 * reset request is issued.
 			 */
+
 			hdmi_writeb(hdmi, (u8)~HDMI_MC_SWRSTZ_TMDSSWRST_REQ,
 				    HDMI_MC_SWRSTZ);
 			hdmi_writeb(hdmi, 1, HDMI_FC_SCRAMBLER_CTRL);
+
 		} else {
 			hdmi_writeb(hdmi, 0, HDMI_FC_SCRAMBLER_CTRL);
 			hdmi_writeb(hdmi, (u8)~HDMI_MC_SWRSTZ_TMDSSWRST_REQ,
@@ -2097,6 +2175,7 @@ static void dw_hdmi_clear_overflow(struct dw_hdmi *hdmi)
 	case 0x201a:
 	case 0x211a:
 	case 0x212a:
+	case 0x214a:
 		count = 1;
 		break;
 	default:
@@ -2174,6 +2253,9 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi,
 				  &hdmi->previous_mode);
 	if (ret)
 		return ret;
+
+	dw_hdmi_set_high_tmds_clock_ratio(hdmi,  &connector->display_info);
+
 	hdmi->phy.enabled = true;
 
 	/* HDMI Initialization Step B.3 */
@@ -2359,6 +2441,7 @@ static struct edid *dw_hdmi_get_edid(struct dw_hdmi *hdmi,
 		edid->width_cm, edid->height_cm);
 
 	hdmi->sink_is_hdmi = drm_detect_hdmi_monitor(edid);
+	hdmi->sink_is_hdmi = TRUE;
 	hdmi->sink_has_audio = drm_detect_monitor_audio(edid);
 
 	return edid;
@@ -3084,7 +3167,7 @@ static int dw_hdmi_detect_phy(struct dw_hdmi *hdmi)
 	phy_type = hdmi->plat_data->phy_force_vendor ?
 				DW_HDMI_PHY_VENDOR_PHY :
 				hdmi_readb(hdmi, HDMI_CONFIG2_ID);
-
+#if 0
 	if (phy_type == DW_HDMI_PHY_VENDOR_PHY) {
 		/* Vendor PHYs require support from the glue layer. */
 		if (!hdmi->plat_data->phy_ops || !hdmi->plat_data->phy_name) {
@@ -3098,7 +3181,7 @@ static int dw_hdmi_detect_phy(struct dw_hdmi *hdmi)
 		hdmi->phy.name = hdmi->plat_data->phy_name;
 		return 0;
 	}
-
+#endif
 	/* Synopsys PHYs are handled internally. */
 	for (i = 0; i < ARRAY_SIZE(dw_hdmi_phys); ++i) {
 		if (dw_hdmi_phys[i].type == phy_type) {
@@ -3186,6 +3269,8 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 	struct dw_hdmi_cec_data cec;
 	struct dw_hdmi *hdmi;
 	struct resource *iores = NULL;
+	const char* se9_flag;
+	const char str[] = "SE9";
 	int irq;
 	int ret;
 	u32 val = 1;
@@ -3255,54 +3340,17 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 			ret = PTR_ERR(hdmi->regm);
 			goto err_res;
 		}
+
+		se9_flag = of_get_property(np, "label", NULL);
+		if(se9_flag) {
+			if(strcmp(se9_flag, str) == 0) {
+				hdmi->is_se9 = true;
+			}
+		} else {
+			hdmi->is_se9 = false;
+		}
 	} else {
 		hdmi->regm = plat_data->regm;
-	}
-
-	hdmi->isfr_clk = devm_clk_get(hdmi->dev, "isfr");
-	if (IS_ERR(hdmi->isfr_clk)) {
-		ret = PTR_ERR(hdmi->isfr_clk);
-		dev_err(hdmi->dev, "Unable to get HDMI isfr clk: %d\n", ret);
-		goto err_res;
-	}
-
-	ret = clk_prepare_enable(hdmi->isfr_clk);
-	if (ret) {
-		dev_err(hdmi->dev, "Cannot enable HDMI isfr clock: %d\n", ret);
-		goto err_res;
-	}
-
-	hdmi->iahb_clk = devm_clk_get(hdmi->dev, "iahb");
-	if (IS_ERR(hdmi->iahb_clk)) {
-		ret = PTR_ERR(hdmi->iahb_clk);
-		dev_err(hdmi->dev, "Unable to get HDMI iahb clk: %d\n", ret);
-		goto err_isfr;
-	}
-
-	ret = clk_prepare_enable(hdmi->iahb_clk);
-	if (ret) {
-		dev_err(hdmi->dev, "Cannot enable HDMI iahb clock: %d\n", ret);
-		goto err_isfr;
-	}
-
-	hdmi->cec_clk = devm_clk_get(hdmi->dev, "cec");
-	if (PTR_ERR(hdmi->cec_clk) == -ENOENT) {
-		hdmi->cec_clk = NULL;
-	} else if (IS_ERR(hdmi->cec_clk)) {
-		ret = PTR_ERR(hdmi->cec_clk);
-		if (ret != -EPROBE_DEFER)
-			dev_err(hdmi->dev, "Cannot get HDMI cec clock: %d\n",
-				ret);
-
-		hdmi->cec_clk = NULL;
-		goto err_iahb;
-	} else {
-		ret = clk_prepare_enable(hdmi->cec_clk);
-		if (ret) {
-			dev_err(hdmi->dev, "Cannot enable HDMI cec clock: %d\n",
-				ret);
-			goto err_iahb;
-		}
 	}
 
 	/* Product and revision IDs */
@@ -3402,9 +3450,11 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 		pdevinfo.name = "dw-hdmi-ahb-audio";
 		pdevinfo.data = &audio;
 		pdevinfo.size_data = sizeof(audio);
-		pdevinfo.dma_mask = DMA_BIT_MASK(32);
+		pdevinfo.dma_mask = DMA_BIT_MASK(64);
 		hdmi->audio = platform_device_register_full(&pdevinfo);
-	} else if (config0 & HDMI_CONFIG0_I2S) {
+	}
+#if 0
+	else if (config0 & HDMI_CONFIG0_I2S) {
 		struct dw_hdmi_i2s_audio_data audio;
 
 		audio.hdmi	= hdmi;
@@ -3417,7 +3467,7 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 		pdevinfo.name = "dw-hdmi-i2s-audio";
 		pdevinfo.data = &audio;
 		pdevinfo.size_data = sizeof(audio);
-		pdevinfo.dma_mask = DMA_BIT_MASK(32);
+		pdevinfo.dma_mask = DMA_BIT_MASK(64);
 		hdmi->audio = platform_device_register_full(&pdevinfo);
 	}
 
@@ -3433,7 +3483,7 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 
 		hdmi->cec = platform_device_register_full(&pdevinfo);
 	}
-
+#endif
 	drm_bridge_add(&hdmi->bridge);
 
 	return hdmi;
@@ -3516,6 +3566,7 @@ MODULE_AUTHOR("Sascha Hauer <s.hauer@pengutronix.de>");
 MODULE_AUTHOR("Andy Yan <andy.yan@rock-chips.com>");
 MODULE_AUTHOR("Yakir Yang <ykk@rock-chips.com>");
 MODULE_AUTHOR("Vladimir Zapolskiy <vladimir_zapolskiy@mentor.com>");
+MODULE_AUTHOR("Yu Yang <yu.yang@sophgo.com>");
 MODULE_DESCRIPTION("DW HDMI transmitter driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:dw-hdmi");

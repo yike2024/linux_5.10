@@ -21,6 +21,12 @@
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 #include <linux/reset.h>
+#include <linux/io.h>
+#include <linux/delay.h>
+
+#if IS_ENABLED(CONFIG_ARCH_CVITEK)
+#include <linux/of_gpio.h>
+#endif
 
 struct dwc3_of_simple {
 	struct device		*dev;
@@ -28,13 +34,49 @@ struct dwc3_of_simple {
 	int			num_clocks;
 	struct reset_control	*resets;
 	bool			need_reset;
+	void __iomem *reg_usbsys;
+	void __iomem *reg_phy_tune_ctrl_reg;
+	int vbus_gpio;
 };
+
+#define OTP_USB_XTAL_PHY_MASK 	0x3
+
+#define REG_USB_SYS_REG_00		0x0
+#define REG_USB_EN				(1 << 0)
+
+#define REG_USB_SYS_REG_0C		0x0c
+#define REG_PHY_REF_CLKDIV2                (1L << 0)
+#define REG_PHY_FSEL_POS                   1
+#define REG_PHY_FSEL_MSK                   (0x3fL << REG_PHY_FSEL_POS)
+#define REG_PHY_MPLL_MULTIPLIER_POS        7
+#define REG_PHY_MPLL_MULTIPLIER_MSK        (0x7fL << REG_PHY_MPLL_MULTIPLIER_POS)
+#define REG_PHY_SSC_REF_CLK_SEL_POS        14
+#define REG_PHY_SSC_REF_CLK_SEL_MSK        (0x1ffL << REG_PHY_SSC_REF_CLK_SEL_POS)
+#define REG_PHY_REF_SSP_EN					(1 << 24)
+
+#define REG_USB_SYS_REG_14					0x14
+#define REG_PHY_PHY_RESET					(1 << 5)
+
+#define USB_PHY_TUNE_CTRL_REG0				0x0
+
+#define USB_PHY_TUNE_CTRL_REG1				0x4
+#define REG_USB_PHY_PCS_RX_LOS_MASK_VAL_POS 13
+#define REG_USB_PHY_PCS_RX_LOS_MASK_VAL_MSK (0x3ff << REG_USB_PHY_PCS_RX_LOS_MASK_VAL_POS)
+
+#define USB_PHY_TUNE_CTRL_REG2				0x8
 
 static int dwc3_of_simple_probe(struct platform_device *pdev)
 {
 	struct dwc3_of_simple	*simple;
 	struct device		*dev = &pdev->dev;
 	struct device_node	*np = dev->of_node;
+
+#if IS_ENABLED(CONFIG_ARCH_CVITEK)
+	struct resource *res;
+	uint32_t value;
+	uint32_t otp_usb_xtal_phy;
+	uint32_t los_mask;
+#endif
 
 	int			ret;
 
@@ -44,6 +86,73 @@ static int dwc3_of_simple_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, simple);
 	simple->dev = dev;
+
+#if IS_ENABLED(CONFIG_ARCH_CVITEK)
+	if (of_device_is_compatible(np, "sophgo,cv186x-dwc3"))
+	{
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		simple->reg_usbsys = devm_ioremap_resource(&pdev->dev, res);
+		if (IS_ERR(simple->reg_usbsys))
+			return PTR_ERR(simple->reg_usbsys);
+
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		simple->reg_phy_tune_ctrl_reg = devm_ioremap_resource(&pdev->dev, res);
+		if (IS_ERR(simple->reg_phy_tune_ctrl_reg))
+			return PTR_ERR(simple->reg_phy_tune_ctrl_reg);
+
+		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_14) | (REG_PHY_PHY_RESET);
+		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_14);
+
+		msleep(1);
+
+		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_14) & (~REG_PHY_PHY_RESET);
+		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_14);
+
+		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_0C) | (REG_PHY_REF_SSP_EN);
+		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_0C);
+
+		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_00) | (REG_USB_EN);
+		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_00);
+
+		otp_usb_xtal_phy = readl(simple->reg_usbsys + REG_USB_SYS_REG_0C) & OTP_USB_XTAL_PHY_MASK;
+
+		value &= readl(simple->reg_usbsys + REG_USB_SYS_REG_0C)
+				& ~(REG_PHY_REF_CLKDIV2) & ~(REG_PHY_FSEL_MSK)
+				& ~(REG_PHY_MPLL_MULTIPLIER_MSK) & ~(REG_PHY_SSC_REF_CLK_SEL_MSK);
+		switch(otp_usb_xtal_phy) {
+			case 0x0:    // xtal = 24 MHz
+					value |= (0x2A << REG_PHY_FSEL_POS);
+					los_mask = 240;
+					break;
+			case 0x1:    // xtal = 19.2 MHz
+					value |= (0x38 << REG_PHY_FSEL_POS);
+					los_mask = 192;
+					break;
+			case 0x2:    // xtal = 20 MHz
+					value |= (0x31 << REG_PHY_FSEL_POS);
+					los_mask = 200;
+					break;
+			case 0x3:    // xtal = 40 MHz
+					value |= REG_PHY_REF_CLKDIV2 | (0x31 << REG_PHY_FSEL_POS);
+					los_mask = 200;
+					break;
+		}
+		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_0C);
+
+		value = readl(simple->reg_phy_tune_ctrl_reg + USB_PHY_TUNE_CTRL_REG1) & ~(REG_USB_PHY_PCS_RX_LOS_MASK_VAL_MSK);
+		value |= (los_mask << REG_USB_PHY_PCS_RX_LOS_MASK_VAL_POS);
+		writel(value, simple->reg_phy_tune_ctrl_reg + USB_PHY_TUNE_CTRL_REG1);
+
+		simple->vbus_gpio = of_get_named_gpio(simple->dev->of_node, "vbus-gpio", 0);
+		dev_dbg(simple->dev, "get vbus_gpio number:%d\n", simple->vbus_gpio);
+		if (gpio_is_valid(simple->vbus_gpio)) {
+			if (devm_gpio_request_one(simple->dev, simple->vbus_gpio, GPIOF_OUT_INIT_HIGH, "vbus-gpio")) {
+				simple->vbus_gpio = -EINVAL;
+				dev_err(simple->dev, "request gpio fail!\n");
+			}
+		}
+	}
+#endif
 
 	/*
 	 * Some controllers need to toggle the usb3-otg reset before trying to
@@ -178,6 +287,7 @@ static const struct of_device_id of_dwc3_simple_match[] = {
 	{ .compatible = "allwinner,sun50i-h6-dwc3" },
 	{ .compatible = "hisilicon,hi3670-dwc3" },
 	{ .compatible = "intel,keembay-dwc3" },
+	{ .compatible = "sophgo,cv186x-dwc3" },
 	{ /* Sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, of_dwc3_simple_match);

@@ -436,6 +436,36 @@ void ahci_save_initial_config(struct device *dev, struct ahci_host_priv *hpriv)
 	hpriv->saved_cap = cap = readl(mmio + HOST_CAP);
 	hpriv->saved_port_map = port_map = readl(mmio + HOST_PORTS_IMPL);
 
+
+	/*hard code*/
+#if 0
+#define	BIT4  1 << 4
+#define BIT5  1 << 5
+	int ret;
+
+	ret = readl(mmio + 0x12c);
+	ret &= ~(BIT5 | BIT4);
+	ret |= (3 << 4);
+
+	writel(ret, mmio + 0x12c);
+	ret = readl(mmio + 0x12c);
+	pr_info("!!!%s port0 ctrl(0x%04x)!!!\n", __func__, ret);
+
+//port1
+	ret = readl(mmio + 0x1ac);
+	ret &= ~(BIT5 | BIT4);
+	ret |= (3 << 4);
+
+	writel(ret, mmio + 0x1ac);
+	ret = readl(mmio + 0x1ac);
+	pr_info("!!!%s port1 ctrl(0x%04x)!!!\n", __func__, ret);
+#endif
+	/*hard code*/
+
+	pr_info("!!!%s cap(0x%04x)!!!\n", __func__, cap);
+	pr_info("!!!%s port_map(0x%04x)!!!\n", __func__, port_map);
+	pr_info("!!!%s force_port_map(0x%04x)!!!\n", __func__, hpriv->force_port_map);
+
 	/* CAP2 register is only defined for AHCI 1.2 and later */
 	vers = readl(mmio + HOST_VERSION);
 	if ((vers >> 16) > 1 ||
@@ -2363,7 +2393,7 @@ static int ahci_port_start(struct ata_port *ap)
 		rx_fis_sz = AHCI_RX_FIS_SZ;
 	}
 
-	mem = dmam_alloc_coherent(dev, dma_sz, &mem_dma, GFP_KERNEL);
+	mem = dmam_alloc_coherent(dev, dma_sz, &mem_dma, GFP_KERNEL | GFP_DMA);
 	if (!mem)
 		return -ENOMEM;
 

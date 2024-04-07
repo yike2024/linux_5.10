@@ -42,6 +42,16 @@ config PWM_DEBUG
 	  It is expected to introduce some runtime overhead and diagnostic
 	  output to the kernel log, so only enable while working on a driver.
 
+config CVITEK_PWM
+	tristate "CVITEK PWM support"
+	depends on PWM
+	default m
+	help
+	  Generic PWM framework driver for Analog Baseband AB8500.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called pwm-ab8500.
+
 config PWM_AB8500
 	tristate "AB8500 PWM support"
 	depends on AB8500_CORE && ARCH_U8500

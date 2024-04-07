@@ -24,6 +24,14 @@ config MTD_SPI_NOR_USE_4K_SECTORS
 	  Please note that some tools/drivers/filesystems may not work with
 	  4096 B erase size (e.g. UBIFS requires 15 KiB as a minimum).
 
+config SPI_FLASH_BAR
+	bool "Support read/write extended address register"
+	default y
+	help
+          The extended address register is only used when the address mode is
+	  3-Byte mode, as to set the higher address. The default value of
+	  the address bit is 0
+
 source "drivers/mtd/spi-nor/controllers/Kconfig"
 
 endif # MTD_SPI_NOR

@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Generic secure otp drivers configuration
+#
+
+menuconfig OTP
+	bool "OTP drivers"
+	default y
+	help
+		OTP drivers offer a generic mechanism for
+		secure otp management.
+
+if OTP
+
+config SECURE_OTP
+	tristate "secure otp driver"
+	default y
+	help
+		Select this driver for CVITEK A2 secure otp
+		This driver is used for program and read otp
+		This driver can also be built as a module
+		But build-in is better.
+
+endif

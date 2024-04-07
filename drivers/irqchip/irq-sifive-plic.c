@@ -163,11 +163,17 @@ static void plic_irq_eoi(struct irq_data *d)
 {
 	struct plic_handler *handler = this_cpu_ptr(&plic_handlers);
 
-	writel(d->hwirq, handler->hart_base + CONTEXT_CLAIM);
+	if (irqd_irq_masked(d)) {
+		plic_irq_unmask(d);
+		writel(d->hwirq, handler->hart_base + CONTEXT_CLAIM);
+		plic_irq_mask(d);
+	} else {
+		writel(d->hwirq, handler->hart_base + CONTEXT_CLAIM);
+	}
 }
 
 static struct irq_chip plic_chip = {
-	.name		= "SiFive PLIC",
+	.name		= "T-Head PLIC",
 	.irq_mask	= plic_irq_mask,
 	.irq_unmask	= plic_irq_unmask,
 	.irq_eoi	= plic_irq_eoi,
@@ -297,6 +303,7 @@ static int __init plic_init(struct device_node *node,
 		goto out_iounmap;
 
 	nr_contexts = of_irq_count(node);
+	pr_debug("nr_contexts = 0x%x.\n", nr_contexts);
 	if (WARN_ON(!nr_contexts))
 		goto out_iounmap;
 
@@ -320,9 +327,10 @@ static int __init plic_init(struct device_node *node,
 		 * Skip contexts other than external interrupts for our
 		 * privilege level.
 		 */
-		if (parent.args[0] != RV_IRQ_EXT)
+		if (parent.args[0] != RV_IRQ_EXT){
+			pr_debug("[%s]: %d, irq type: 0x%x\n", __func__, __LINE__, parent.args[0]);
 			continue;
-
+		}
 		hartid = riscv_of_parent_hartid(parent.np);
 		if (hartid < 0) {
 			pr_warn("failed to parse hart ID for context %d.\n", i);
@@ -355,13 +363,14 @@ static int __init plic_init(struct device_node *node,
 			goto done;
 		}
 
+		// Use as a single core
 		cpumask_set_cpu(cpu, &priv->lmask);
 		handler->present = true;
 		handler->hart_base =
-			priv->regs + CONTEXT_BASE + i * CONTEXT_PER_HART;
+			priv->regs + CONTEXT_BASE + CONTEXT_PER_HART;
 		raw_spin_lock_init(&handler->enable_lock);
 		handler->enable_base =
-			priv->regs + ENABLE_BASE + i * ENABLE_PER_HART;
+			priv->regs + ENABLE_BASE + ENABLE_PER_HART;
 		handler->priv = priv;
 done:
 		for (hwirq = 1; hwirq <= nr_irqs; hwirq++)

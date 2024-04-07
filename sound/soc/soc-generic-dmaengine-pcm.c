@@ -20,6 +20,8 @@
  * bytes that are still left to transfer.
  */
 #define SND_DMAENGINE_PCM_FLAG_NO_RESIDUE BIT(31)
+#define PERIOD_BYTE_MAX 1024 * 4 * 13
+#define BUFFER_BYTE_MAX 1024 * 4 * 40
 
 static struct device *dmaengine_dma_dev(struct dmaengine_pcm *pcm,
 	struct snd_pcm_substream *substream)
@@ -130,8 +132,8 @@ dmaengine_pcm_set_runtime_hwparams(struct snd_soc_component *component,
 	hw.periods_min = 2;
 	hw.periods_max = UINT_MAX;
 	hw.period_bytes_min = 256;
-	hw.period_bytes_max = dma_get_max_seg_size(dma_dev);
-	hw.buffer_bytes_max = SIZE_MAX;
+	hw.period_bytes_max = PERIOD_BYTE_MAX;//dma_get_max_seg_size(dma_dev);
+	hw.buffer_bytes_max = BUFFER_BYTE_MAX;//SIZE_MAX;
 	hw.fifo_size = dma_data->fifo_size;
 
 	if (pcm->flags & SND_DMAENGINE_PCM_FLAG_NO_RESIDUE)

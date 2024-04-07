@@ -186,12 +186,40 @@ static unsigned int dw_wdt_get_timeout(struct dw_wdt *dw_wdt)
 	return dw_wdt->timeouts[idx].sec * dw_wdt->rmod;
 }
 
+static cpumask_t cpus_alive = CPU_MASK_NONE;
+
+#ifdef CONFIG_SMP
+static void cpu_alive(void *passed_regs)
+{
+	int cpu = smp_processor_id();
+
+	pr_debug("cpu[%d] setmask \n", cpu);
+	cpumask_set_cpu(cpu, &cpus_alive);
+}
+#endif
+
 static int dw_wdt_ping(struct watchdog_device *wdd)
 {
 	struct dw_wdt *dw_wdt = to_dw_wdt(wdd);
+	static int isFirst = 1;
 
-	writel(WDOG_COUNTER_RESTART_KICK_VALUE, dw_wdt->regs +
-	       WDOG_COUNTER_RESTART_REG_OFFSET);
+#ifdef CONFIG_SMP
+	unsigned int ncpus;
+
+	ncpus = num_online_cpus() - 1;
+
+	if ((isFirst == 1) || cpumask_weight(&cpus_alive) >= ncpus) {
+#endif
+		writel(WDOG_COUNTER_RESTART_KICK_VALUE, dw_wdt->regs +
+			WDOG_COUNTER_RESTART_REG_OFFSET);
+
+#ifdef CONFIG_SMP
+		isFirst = 0;
+		cpus_alive = CPU_MASK_NONE;
+		smp_call_function(cpu_alive, NULL, 0);
+		smp_wmb();
+	}
+#endif
 
 	return 0;
 }

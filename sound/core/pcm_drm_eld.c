@@ -27,7 +27,7 @@ static int eld_limit_rates(struct snd_pcm_hw_params *params,
 {
 	struct snd_interval *r = hw_param_interval(params, rule->var);
 	const struct snd_interval *c;
-	unsigned int rate_mask = 7, i;
+	unsigned int rate_mask = 0x7f, i;
 	const u8 *sad, *eld = rule->private;
 
 	sad = drm_eld_sad(eld);
@@ -55,7 +55,7 @@ static int eld_limit_channels(struct snd_pcm_hw_params *params,
 {
 	struct snd_interval *c = hw_param_interval(params, rule->var);
 	const struct snd_interval *r;
-	struct snd_interval t = { .min = 1, .max = 2, .integer = 1, };
+	struct snd_interval t = { .min = 1, .max = 8, .integer = 1, };
 	unsigned int i;
 	const u8 *sad, *eld = rule->private;
 

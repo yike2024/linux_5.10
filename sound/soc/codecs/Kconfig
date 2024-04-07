@@ -11,6 +11,14 @@ config SND_SOC_I2C_AND_SPI
 
 menu "CODEC drivers"
 
+config SND_SOC_ADAU1372
+    tristate
+	depends on SND
+	default y
+	select SND_SOC_ADAU1372_I2C if I2C
+	select SND_SOC_ADAU1372_SPI if SPI
+	select SND_SOC_ADAU_UTILS
+
 config SND_SOC_ALL_CODECS
 	tristate "Build all ASoC CODEC drivers"
 	depends on COMPILE_TEST

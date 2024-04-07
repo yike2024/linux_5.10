@@ -31,6 +31,8 @@ source "drivers/media/platform/davinci/Kconfig"
 
 source "drivers/media/platform/omap/Kconfig"
 
+source "drivers/media/platform/soph/Kconfig"
+
 config VIDEO_ASPEED
 	tristate "Aspeed AST2400 and AST2500 Video Engine driver"
 	depends on VIDEO_V4L2
@@ -534,6 +536,8 @@ config VIDEO_SUN8I_ROTATE
 	help
 	   Support for the Allwinner DE2 rotation unit.
 	   To compile this driver as a module choose m here.
+
+source "drivers/media/platform/cvitek/Kconfig"
 
 endif # V4L_MEM2MEM_DRIVERS
 

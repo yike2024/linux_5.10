@@ -10,6 +10,7 @@
 #include <asm/cputype.h>
 #include <asm/cpufeature.h>
 #include <asm/fpsimd.h>
+#include <asm/io.h>
 
 #include <linux/bitops.h>
 #include <linux/bug.h>
@@ -136,21 +137,26 @@ static const char *const compat_hwcap2_str[] = {
 static int c_show(struct seq_file *m, void *v)
 {
 	int i, j;
-	bool compat = personality(current->personality) == PER_LINUX32;
+	int opt_cpu;
+	bool compat = personality(current->personality) == PER_LINUX;
+	opt_cpu = readl(ioremap(0x27102014, 4));
 
 	for_each_online_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
 		u32 midr = cpuinfo->reg_midr;
-
-		/*
+        /*
 		 * glibc reads /proc/cpuinfo to determine the number of
 		 * online processors, looking for lines beginning with
 		 * "processor".  Give glibc what it expects.
 		 */
 		seq_printf(m, "processor\t: %d\n", i);
-		if (compat)
-			seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
-				   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
+		if (compat) {
+			if (opt_cpu == 0) {
+				seq_printf(m, "model name\t: %s\n", "bm1688");
+			} else {
+				seq_printf(m, "model name\t: %s\n", "cv186ah");
+			}
+		}
 
 		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
 			   loops_per_jiffy / (500000UL/HZ),
@@ -191,7 +197,11 @@ static int c_show(struct seq_file *m, void *v)
 
 		seq_printf(m, "CPU implementer\t: 0x%02x\n",
 			   MIDR_IMPLEMENTOR(midr));
-		seq_printf(m, "CPU architecture: 8\n");
+		if (opt_cpu == 0) {
+			seq_printf(m, "CPU architecture: 8\n");
+		} else {
+			seq_printf(m, "CPU architecture: 6\n");
+		}
 		seq_printf(m, "CPU variant\t: 0x%x\n", MIDR_VARIANT(midr));
 		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));

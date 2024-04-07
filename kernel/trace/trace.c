@@ -6786,6 +6786,77 @@ tracing_mark_raw_write(struct file *filp, const char __user *ubuf,
 	return written;
 }
 
+#if IS_ENABLED(CONFIG_ARCH_CV186X)
+/*
+ * kernel version of tracing_mark_write
+ */
+static ssize_t __tracing_mark_write(const char *kbuf, size_t cnt)
+{
+	struct trace_array *tr = &global_trace;
+	struct ring_buffer_event *event;
+	struct trace_buffer *buffer;
+	struct print_entry *entry;
+	unsigned long irq_flags;
+	ssize_t written;
+	int size;
+
+	if (tracing_disabled)
+		return -EINVAL;
+
+	if (!(tr->trace_flags & TRACE_ITER_MARKERS))
+		return -EINVAL;
+
+	if (cnt > TRACE_BUF_SIZE)
+		cnt = TRACE_BUF_SIZE;
+
+	local_save_flags(irq_flags);
+	size = sizeof(*entry) + cnt + 2; /* possible \n added */
+	buffer = tr->array_buffer.buffer;
+	event = trace_buffer_lock_reserve(buffer, TRACE_PRINT, size,
+					  irq_flags, preempt_count());
+	if (!event) {
+		/* Ring buffer disabled, return as if not open for write */
+		written = -EBADF;
+		goto out;
+	}
+
+	entry = ring_buffer_event_data(event);
+	entry->ip = (unsigned long)&tracing_mark_write; // to get correct function string
+
+	memcpy(&entry->buf, kbuf, cnt);
+
+	if (entry->buf[cnt - 1] != '\n') {
+		entry->buf[cnt] = '\n';
+		entry->buf[cnt + 1] = '\0';
+	} else
+		entry->buf[cnt] = '\0';
+
+	__buffer_unlock_commit(buffer, event);
+
+	written = cnt;
+
+ out:
+	return written;
+}
+
+void atrace_begin_body(const char *name)
+{
+	char tr_buf[TRACE_BUF_SIZE];
+
+	snprintf(tr_buf, sizeof(tr_buf), "B|%d|%s", current->pid, name);
+	__tracing_mark_write(tr_buf, strlen(tr_buf));
+}
+EXPORT_SYMBOL(atrace_begin_body);
+
+void atrace_end_body(void)
+{
+	char tr_buf[TRACE_BUF_SIZE];
+
+	snprintf(tr_buf, sizeof(tr_buf), "E|%d", current->pid);
+	__tracing_mark_write(tr_buf, strlen(tr_buf));
+}
+EXPORT_SYMBOL(atrace_end_body);
+#endif
 static int tracing_clock_show(struct seq_file *m, void *v)
 {
 	struct trace_array *tr = m->private;
