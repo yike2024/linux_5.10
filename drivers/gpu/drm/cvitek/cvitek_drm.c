@@ -166,6 +166,9 @@ static int cvitek_drm_bind(struct device *dev)
 	if (ret)
 		return ret;
 
+	/*reset disp0 and disp1*/
+	reset_disp();
+
 	ret = drmm_mode_config_init(drm);
 	if (ret)
 		return ret;

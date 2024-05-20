@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
-// Copyright (c) 2017 Intel Corporation.
+/*
+ * os04e10 driver
+ *
+ * Copyright (C) 2024 Sophon Co., Ltd.
+ *
+ */
 #include <linux/clk.h>
 #include <linux/acpi.h>
 #include <linux/i2c.h>
@@ -30,10 +35,13 @@
 #define OS04E10_CHIP_ID_ADDR_H	0x300A
 #define OS04E10_CHIP_ID_ADDR_M	0x300B
 #define OS04E10_CHIP_ID_ADDR_L	0x300C
-#define OS04E10_CHIP_ID			0x530445
+#define OS04E10_CHIP_ID		0x530445
 
+/*Sensor type for isp middleware*/
+#define OS04E10_SNS_TYPE_SDR V4L2_OV_OS04E10_MIPI_4M_30FPS_2L_10BIT
+#define OS04E10_SNS_TYPE_WDR V4L2_OV_OS04E10_MIPI_4M_30FPS_2L_10BIT_WDR2TO1
 
-static const enum mipi_wdr_mode_e os04e10_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+static const enum mipi_wdr_mode_e os04e10_wdr_mode = CVI_MIPI_WDR_MODE_VC;
 
 static int os04e10_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -42,7 +50,6 @@ module_param_array(force_bus, int, &os04e10_count, 0644);
 static int os04e10_probe_index;
 static const unsigned short os04e10_i2c_list[] = {0x36};
 static int os04e10_bus_map[MAX_SENSOR_DEVICE] = {1, 0, -1, -1, -1, -1};
-static sns_sync_info_t g_sns_sync_info;
 
 struct os04e10_reg_list {
 	u32 num_of_regs;
@@ -60,6 +67,7 @@ struct os04e10_mode {
 	u32 exp_def;
 	u32 mipi_wdr_mode;
 	struct v4l2_fract max_fps;
+	sns_sync_info_t os04e10_sync_info;
 	struct os04e10_reg_list reg_list;
 	struct os04e10_reg_list wdr_reg_list;
 };
@@ -207,10 +215,8 @@ static int os04e10_write_regs(struct os04e10 *os04e10,
 		ret = os04e10_write_reg(os04e10, regs[i].address, 1,
 					regs[i].val);
 		if (ret) {
-			dev_err_ratelimited(
-				&client->dev,
-				"Failed to write reg 0x%4.4x. error = %d\n",
-				regs[i].address, ret);
+			dev_err_ratelimited(&client->dev, "Failed to write reg 0x%4.4x. error=%d\n",
+					    regs[i].address, ret);
 
 			return ret;
 		}
@@ -251,22 +257,20 @@ static int os04e10_set_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-
 static const struct v4l2_ctrl_ops os04e10_ctrl_ops = {
 	.s_ctrl = os04e10_set_ctrl,
 };
 
 static int g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
-				struct v4l2_mbus_config *config)
+			 struct v4l2_mbus_config *config)
 {
 	config->type = V4L2_MBUS_CSI2_DPHY;
 	return 0;
 }
 
-
 static int enum_mbus_code(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_mbus_code_enum *code)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_mbus_code_enum *code)
 {
 	/* Only one bayer order(GRBG) is supported */
 	if (code->index > 0)
@@ -278,24 +282,20 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int enum_frame_size(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_pad_config *cfg,
-				   struct v4l2_subdev_frame_size_enum *fse)
+			   struct v4l2_subdev_pad_config *cfg,
+			   struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index >= ARRAY_SIZE(supported_modes)) {
-		printk("[os04e10] error fse index!\n");
-		return -EINVAL;
-	}
+	struct os04e10 *os04e10 = to_os04e10(sd);
 
-	fse->min_width = supported_modes[fse->index].width;
-	fse->max_width = supported_modes[fse->index].max_width;
-	fse->min_height = supported_modes[fse->index].height;
-	fse->max_height = supported_modes[fse->index].max_height;
+	fse->min_width = os04e10->cur_mode->width;
+	fse->max_width = os04e10->cur_mode->max_width;
+	fse->min_height = os04e10->cur_mode->height;
+	fse->max_height = os04e10->cur_mode->max_height;
 
 	return 0;
 }
 
-static void update_pad_format(const struct os04e10_mode *mode,
-				      struct v4l2_subdev_format *fmt)
+static void update_pad_format(const struct os04e10_mode *mode, struct v4l2_subdev_format *fmt)
 {
 	fmt->format.width = mode->width;
 	fmt->format.height = mode->height;
@@ -304,19 +304,18 @@ static void update_pad_format(const struct os04e10_mode *mode,
 }
 
 static int get_pad_format(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct os04e10 *os04e10 = to_os04e10(sd);
 	struct v4l2_mbus_framefmt *framefmt;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&os04e10->mutex);
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		framefmt = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 		fmt->format = *framefmt;
-		mutex_unlock(&os04e10->mutex);
-		return -ENOTTY;
+		ret = -ENOTTY;
 	} else {
 		update_pad_format(os04e10->cur_mode, fmt);
 	}
@@ -326,11 +325,11 @@ static int get_pad_format(struct v4l2_subdev *sd,
 }
 
 static int set_pad_format(struct v4l2_subdev *sd,
-		       struct v4l2_subdev_pad_config *cfg,
-		       struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct os04e10 *os04e10 = to_os04e10(sd);
-	const struct os04e10_mode *mode;
+	struct os04e10_mode *mode;
 	struct v4l2_mbus_framefmt *framefmt;
 
 	mutex_lock(&os04e10->mutex);
@@ -359,13 +358,11 @@ static int set_pad_format(struct v4l2_subdev *sd,
 static void os04e10_standby(struct os04e10 *os04e10)
 {
 	os04e10_write_reg(os04e10, 0x0100, REG_VALUE_08BIT, 0x00);
-	printk("[os04e10] standby\n");
 }
 
 static void os04e10_restart(struct os04e10 *os04e10)
 {
 	os04e10_write_reg(os04e10, 0x0100, REG_VALUE_08BIT, 0x01);
-	printk("[os04e10] restart\n");
 }
 
 /* Start streaming */
@@ -373,33 +370,39 @@ static int start_streaming(struct os04e10 *os04e10)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&os04e10->sd);
 	const struct os04e10_reg_list *reg_list;
+	const sns_sync_info_t *sync_info;
 	int ret;
 
-	/* Apply default values of current mode */
-	reg_list = &os04e10->cur_mode->reg_list;
+	if (os04e10->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+		reg_list = &os04e10->cur_mode->reg_list;
+	} else {//wdr
+		reg_list = &os04e10->cur_mode->wdr_reg_list;
+	}
+
 	ret = os04e10_write_regs(os04e10, reg_list->regs, reg_list->num_of_regs);
 	if (ret) {
 		dev_err(&client->dev, "%s failed to set mode\n", __func__);
 		return ret;
 	}
 
-	if (g_sns_sync_info.num_of_regs > 3) {
-		ret = os04e10_write_regs(os04e10, (struct os04e10_reg *)g_sns_sync_info.regs + 1,
-			g_sns_sync_info.num_of_regs - 3);
+	sync_info = &os04e10->cur_mode->os04e10_sync_info;
 
+	if (sync_info->num_of_regs > 3) {
+		ret = os04e10_write_regs(os04e10, (struct os04e10_reg *)sync_info->regs + 1,
+					 sync_info->num_of_regs - 3);
 		if (ret) {
 			dev_err(&client->dev, "%s failed to set default\n", __func__);
 			return ret;
 		}
 	}
 
-	usleep_range(100 * 1000, 120 * 2000);
+	usleep_range(100 * 1000, 200 * 1000);
 	/* Apply customized values from user */
 	ret =  __v4l2_ctrl_handler_setup(os04e10->sd.ctrl_handler);
 	if (ret)
 		return ret;
 
-	printk("[os04e10] init reg done\n");
+	dev_info(&client->dev, "wdr_mode(%d) reg setting done\n", os04e10->cur_mode->mipi_wdr_mode);
 
 	return ret;
 }
@@ -416,8 +419,6 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	struct os04e10 *os04e10 = to_os04e10(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0;
-
-	printk("[os04e10] set stream(%d)\n", enable);
 
 	mutex_lock(&os04e10->mutex);
 	if (os04e10->streaming == enable) {
@@ -447,7 +448,7 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	os04e10->streaming = enable;
 	mutex_unlock(&os04e10->mutex);
 
-	printk("[os04e10] set stream success\n");
+	dev_info(&client->dev, "set stream(%d) success\n", enable);
 
 	return ret;
 
@@ -495,23 +496,23 @@ error:
 /* Verify chip ID */
 static int os04e10_identify_module(struct os04e10 *os04e10)
 {
-	// struct i2c_client *client = v4l2_get_subdevdata(&os04e10->sd);
-	int ret;
-	int nVal, nVal2, nVal3;
-	int read_data = 0;
 	struct i2c_client *client = v4l2_get_subdevdata(&os04e10->sd);
+	int ret;
+	int val1, val2, val3;
+	int read_data = 0;
 
 	ret = os04e10_read_reg(os04e10, OS04E10_CHIP_ID_ADDR_H,
-			       REG_VALUE_08BIT, &nVal);
+			       REG_VALUE_08BIT, &val1);
+	dev_info(&client->dev, "read id:0x%x, ret:%d", val1, ret);
 	if (ret)
 		return ret;
 
 	ret = os04e10_read_reg(os04e10, OS04E10_CHIP_ID_ADDR_M,
-			       REG_VALUE_08BIT, &nVal2);
+			       REG_VALUE_08BIT, &val2);
 	ret = os04e10_read_reg(os04e10, OS04E10_CHIP_ID_ADDR_L,
-			       REG_VALUE_08BIT, &nVal3);
+			       REG_VALUE_08BIT, &val3);
 
-	read_data = ((nVal & 0xFF) << 16) | ((nVal2 & 0xFF) << 8) | (nVal3 & 0xFF);
+	read_data = ((val1 & 0xFF) << 16) | ((val2 & 0xFF) << 8) | (val3 & 0xFF);
 
 	if (read_data != OS04E10_CHIP_ID) {
 		dev_err(&client->dev, "chip id(%x) mismatch, read(%x)\n",
@@ -526,7 +527,8 @@ static void os04e10_mirror_flip(struct os04e10 *os04e10, int orient)
 {
 	int val = 0;
 	int ori_addr = 0x3820;
-	printk("[os04e10] set mirror_flip:%d", orient);
+
+	pr_info("set mirror_flip:%d", orient);
 
 	os04e10_read_reg(os04e10, ori_addr, REG_VALUE_08BIT, &val);
 
@@ -566,7 +568,7 @@ static int os04e10_update_link_menu(struct os04e10 *os04e10)
 
 	os04e10_link_cif_menu[id][wdr_index] = os04e10->cur_mode->mipi_wdr_mode;
 
-	printk("[os04e10] update mipi_mode:%lld", os04e10_link_cif_menu[id][wdr_index]);
+	dev_info(&client->dev, "update mipi_mode:%lld", os04e10_link_cif_menu[id][wdr_index]);
 
 	ctrl_hdlr = os04e10->sd.ctrl_handler;
 	v4l2_ctrl_handler_free(ctrl_hdlr);
@@ -579,11 +581,9 @@ static int os04e10_update_link_menu(struct os04e10 *os04e10)
 	}
 
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&os04e10_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					os04e10_link_cif_menu[id][i], 0,
-					(const s64 * )os04e10_link_cif_menu[id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &os04e10_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      os04e10_link_cif_menu[id][i], 0,
+					       (const s64 *)os04e10_link_cif_menu[id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -613,8 +613,11 @@ static long os04e10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_GET_TYPE:
 	{
 		int type = 0;
+
 		if (os04e10->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-			type = V4L2_OV_OS04E10_MIPI_4M_30FPS_2L_10BIT;
+			type = OS04E10_SNS_TYPE_SDR;
+		} else {//wdr
+			type = OS04E10_SNS_TYPE_WDR;
 		}
 		memcpy(arg, &type, sizeof(int));
 		break;
@@ -623,6 +626,7 @@ static long os04e10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_MIRROR_FLIP:
 	{
 		int orient = 0;
+
 		memcpy(&orient, arg, sizeof(int));
 		os04e10_mirror_flip(os04e10, orient);
 		break;
@@ -632,6 +636,7 @@ static long os04e10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		struct i2c_client *client = v4l2_get_subdevdata(&os04e10->sd);
 		sns_i2c_info_t i2c_info;
+
 		i2c_info.i2c_addr =  client->addr;
 		i2c_info.i2c_idx  =  client->adapter->i2c_idx;
 		memcpy(arg, &i2c_info, sizeof(sns_i2c_info_t));
@@ -641,26 +646,26 @@ static long os04e10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_HDR_ON:
 	{
 		int hdr_on = 0;
+
 		memcpy(&hdr_on, arg, sizeof(int));
 
-		if (hdr_on) {
-			printk("Not support HDR!\n");
-		} else {
+		if (hdr_on)
+			os04e10->cur_mode->mipi_wdr_mode = os04e10_wdr_mode;
+		else
 			os04e10->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
-		}
+
 		os04e10_update_link_menu(os04e10);
 		break;
 	}
 
 	case SNS_V4L2_SET_SNS_SYNC_INFO:
 	{
-		memcpy(&g_sns_sync_info, arg, sizeof(sns_sync_info_t));
+		memcpy(&os04e10->cur_mode->os04e10_sync_info, arg, sizeof(sns_sync_info_t));
 		break;
 	}
 
 	default:
 		ret = -ENOIOCTLCMD;
-		printk("[os04e10] unknown ioctl cmd:%d", cmd);
 		break;
 	}
 
@@ -673,7 +678,6 @@ static long os04e10_compat_ioctl32(struct v4l2_subdev *sd,
 {
 	void __user *up = compat_ptr(arg);
 	long ret;
-	printk("[os04e10] compat ioctl cmd:%d", cmd);
 
 	switch (cmd) {
 	default:
@@ -684,7 +688,6 @@ static long os04e10_compat_ioctl32(struct v4l2_subdev *sd,
 	return ret;
 }
 #endif
-
 
 static const struct v4l2_subdev_core_ops os04e10_core_ops = {
 	.ioctl = os04e10_ioctl,
@@ -740,15 +743,12 @@ static int os04e10_init_controls(struct os04e10 *os04e10, int index_id)
 	mutex_init(&os04e10->mutex);
 	ctrl_hdlr->lock = &os04e10->mutex;
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		if (SNS_CFG_TYPE_WDR_MODE == i) {
+		if (i == SNS_CFG_TYPE_WDR_MODE)
 			os04e10->cur_mode->mipi_wdr_mode = os04e10_link_cif_menu[index_id][i];
-		}
 
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&os04e10_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					os04e10_link_cif_menu[index_id][i], 0,
-					(const s64 * )os04e10_link_cif_menu[index_id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &os04e10_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      os04e10_link_cif_menu[index_id][i], 0,
+					       (const s64 *)os04e10_link_cif_menu[index_id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -798,35 +798,30 @@ static int os04e10_probe(struct i2c_client *client,
 	int bus_id;
 	int ret = -1;
 	int i;
-	memset(&g_sns_sync_info, 0, sizeof(g_sns_sync_info));
 
-	printk("[os04e10] probe id[%d] start\n", os04e10_probe_index);
+	dev_info(dev, "probe id[%d] start\n", os04e10_probe_index);
 
 	os04e10_probe_index++;
 
 	if (index_id >= MAX_SENSOR_DEVICE || index_id < 0) {
-		printk("[os04e10] invalid devid(%d)\n", index_id);
+		dev_info(dev, "invalid devid(%d)\n", index_id);
 		return ret;
 	}
 
 	os04e10 = devm_kzalloc(&client->dev, sizeof(*os04e10), GFP_KERNEL);
-	if (!os04e10) {
-		dev_err(dev, "Failed to alloc devmem!\n");
+	if (!os04e10)
 		return -ENOMEM;
-	}
 
 	sd = &os04e10->sd;
 
 	for (i = 0; i < addr_num; i++) {
-		if (force_bus[index_id] < 0) {
+		if (force_bus[index_id] < 0)
 			bus_id = os04e10_bus_map[index_id];
-		} else {
+		else
 			bus_id = force_bus[index_id];
-		}
 
-		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM) {
+		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM)
 			return ret;
-		}
 
 		client->addr = os04e10_i2c_list[i];
 		client->adapter = i2c_get_adapter(bus_id);
@@ -836,16 +831,16 @@ static int os04e10_probe(struct i2c_client *client,
 		/* Check module identity */
 		ret = os04e10_identify_module(os04e10);
 		if (ret) {
-			printk("id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
-				index_id, bus_id, i, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
+				 index_id, bus_id, i, client->addr);
 
-			if (i == addr_num - 1) {
+			if (i == addr_num - 1)
 				return ret;
-			}
-			continue;;
+
+			continue;
 		} else {
-			printk("id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
-				index_id, bus_id, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
+				 index_id, bus_id, client->addr);
 			break;
 		}
 	}
@@ -854,24 +849,21 @@ static int os04e10_probe(struct i2c_client *client,
 
 	if (index_id >= ARRAY_SIZE(supported_modes)) {
 		os04e10->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct os04e10_mode), GFP_KERNEL);
-
-		memcpy(os04e10->cur_mode, &supported_modes[0],
-					sizeof(struct os04e10_mode));
+						 sizeof(struct os04e10_mode), GFP_KERNEL);
+		memcpy(os04e10->cur_mode, &supported_modes[0], sizeof(struct os04e10_mode));
 	} else {
 		os04e10->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct os04e10_mode), GFP_KERNEL);
-
-		memcpy(os04e10->cur_mode, &supported_modes[index_id],
-					sizeof(struct os04e10_mode));
+						 sizeof(struct os04e10_mode), GFP_KERNEL);
+		memcpy(os04e10->cur_mode, &supported_modes[index_id], sizeof(struct os04e10_mode));
 	}
+
+	memset(&os04e10->cur_mode->os04e10_sync_info, 0, sizeof(sns_sync_info_t));
 
 	mutex_init(&os04e10->mutex);
 
 	ret = os04e10_init_controls(os04e10, index_id);
-	if (ret) {
+	if (ret)
 		return ret;
-	}
 
 	/* Initialize subdev */
 	sd->internal_ops = &os04e10_internal_ops;
@@ -904,7 +896,7 @@ static int os04e10_probe(struct i2c_client *client,
 	pm_runtime_enable(&client->dev);
 	pm_runtime_idle(&client->dev);
 
-	printk("[os04e10] sensor_%d probe success\n", index_id);
+	dev_info(dev, "sensor_%d probe success\n", index_id);
 
 	return 0;
 
@@ -962,7 +954,8 @@ static struct i2c_driver os04e10_i2c_driver = {
 
 static int __init sensor_mod_init(void)
 {
-	printk("== os04e10 mod add ==\n");
+	pr_info("== os04e10 mod add ==\n");
+
 	return i2c_add_driver(&os04e10_i2c_driver);
 }
 

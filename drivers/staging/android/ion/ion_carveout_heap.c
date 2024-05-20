@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * drivers/staging/android/ion/ion_carveout_heap.c
- *
  * Copyright (C) 2011 Google, Inc.
  */
 #include <linux/spinlock.h>
@@ -143,7 +141,7 @@ struct ion_heap *ion_carveout_heap_create(struct ion_platform_heap *heap_data)
 #ifndef CONFIG_ION_CVITEK
 	carveout_heap->heap.flags = ION_HEAP_FLAG_DEFER_FREE;
 #endif
-    carveout_heap->heap.name = heap_data->name;
+	carveout_heap->heap.name = heap_data->name;
 #ifdef CONFIG_ION_CVITEK
 	carveout_heap->heap.total_size = heap_data->size;
 #endif

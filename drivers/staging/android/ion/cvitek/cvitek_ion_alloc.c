@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) Cvitek Co., Ltd. 2019-2020. All rights reserved.
  *
- * File Name: cvitek_ion.c
  * Description:
  */
 
@@ -72,9 +72,9 @@ void cvi_ion_free(int fd)
 }
 EXPORT_SYMBOL(cvi_ion_free);
 
-int bm_ion_alloc(int heap_id , size_t len, bool mmap_cache)
+int bm_ion_alloc(int heap_id, size_t len, bool mmap_cache)
 {
-	struct rlimit new_limit = {.rlim_max=40960, .rlim_cur=40960};
+	struct rlimit new_limit = {.rlim_max = 40960, .rlim_cur = 40960};
 	struct rlimit old_limit = {0};
 	struct ion_heap_query query;
 	int ret = 0, index;
@@ -113,18 +113,11 @@ int bm_ion_alloc(int heap_id , size_t len, bool mmap_cache)
 	vfree(heap_data);
 	//check kernel-thread resource.
 	ret = do_prlimit(current, RLIMIT_NOFILE, NULL, &old_limit);
-//	if(!ret && (old_limit.rlim_cur <= INR_OPEN_CUR))
-//	{
-//		pr_info("current->pid=%d, name=%s, old NOFILE=%d\n", current->pid, current->comm, old_limit.rlim_cur);
-//	}
-	if(old_limit.rlim_cur <= INR_OPEN_CUR)
-	{
+	if (old_limit.rlim_cur <= INR_OPEN_CUR) {
 		//if kernel-thread <= 1024(open files), set RLIMIT_NOFILE to 40960.
 		ret = do_prlimit(current, RLIMIT_NOFILE, &new_limit, NULL);
-		if(ret < 0)
+		if (ret < 0)
 			pr_err("[%s] pid=%d,name=%s, do_prlimit error! ret = %d\n", __func__, current->pid, current->comm, ret);
-//		else
-//			pr_info("current->pid=%d, name=%s, new NOFILE=%d\n", current->pid, current->comm, new_limit.rlim_cur);
 	}
 	return ion_alloc(len, 1 << heap_id,
 			 ((mmap_cache) ? 1 : 0), &buf);

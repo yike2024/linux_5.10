@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
-// Copyright (c) 2017 Intel Corporation.
+/*
+ * gc4653 driver
+ *
+ * Copyright (C) 2024 Sophon Co., Ltd.
+ *
+ */
 #include <linux/clk.h>
 #include <linux/acpi.h>
 #include <linux/i2c.h>
@@ -29,11 +34,13 @@
 /* Chip ID */
 #define GC4653_CHIP_ID_ADDR_H	0x03f0
 #define GC4653_CHIP_ID_ADDR_L	0x03f1
-#define GC4653_CHIP_ID			0x4653
+#define GC4653_CHIP_ID		0x4653
 
-#define USE_MODE_INDEX	0
+/*Sensor type for isp middleware*/
+#define GC4653_SNS_TYPE_SDR V4L2_GCORE_GC4653_MIPI_4M_30FPS_10BIT
+#define GC4653_SNS_TYPE_WDR V4L2_SNS_TYPE_BUTT
 
-static V4L2_SNS_TYPE_E gc4653_sns_type = V4L2_GCORE_GC4653_MIPI_4M_30FPS_10BIT;
+static const enum mipi_wdr_mode_e gc4653_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
 
 static int gc4653_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -42,7 +49,6 @@ module_param_array(force_bus, int, &gc4653_count, 0644);
 static int gc4653_probe_index;
 static const unsigned short gc4653_i2c_list[] = {0x10, 0x29};
 static int gc4653_bus_map[MAX_SENSOR_DEVICE] = {1, 2, -1, -1, -1, -1};
-static sns_sync_info_t g_sns_sync_info;
 
 struct gc4653_reg_list {
 	u32 num_of_regs;
@@ -58,12 +64,15 @@ struct gc4653_mode {
 	u32 hts_def;
 	u32 vts_def;
 	u32 exp_def;
+	u32 mipi_wdr_mode;
 	struct v4l2_fract max_fps;
+	sns_sync_info_t gc4653_sync_info;
 	struct gc4653_reg_list reg_list;
+	struct gc4653_reg_list wdr_reg_list;
 };
 
 /* Mode configs */
-static const struct gc4653_mode supported_modes[] = {
+static struct gc4653_mode supported_modes[] = {
 	{
 		.max_width = 2560,
 		.max_height = 1440,
@@ -93,7 +102,7 @@ struct gc4653 {
 	struct v4l2_ctrl *hblank;
 	struct v4l2_ctrl *exposure;
 	/* Current mode */
-	const struct gc4653_mode *cur_mode;
+	struct gc4653_mode *cur_mode;
 	/* Mutex for serialized access */
 	struct mutex mutex;
 	/* Streaming on/off */
@@ -188,10 +197,8 @@ static int gc4653_write_regs(struct gc4653 *gc4653,
 		ret = gc4653_write_reg(gc4653, regs[i].address, 1,
 					regs[i].val);
 		if (ret) {
-			dev_err_ratelimited(
-				&client->dev,
-				"Failed to write reg 0x%4.4x. error = %d\n",
-				regs[i].address, ret);
+			dev_err_ratelimited(&client->dev, "Failed to write reg 0x%4.4x. error=%d\n",
+					    regs[i].address, ret);
 
 			return ret;
 		}
@@ -232,22 +239,20 @@ static int gc4653_set_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-
 static const struct v4l2_ctrl_ops gc4653_ctrl_ops = {
 	.s_ctrl = gc4653_set_ctrl,
 };
 
 static int g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
-				struct v4l2_mbus_config *config)
+			 struct v4l2_mbus_config *config)
 {
 	config->type = V4L2_MBUS_CSI2_DPHY;
 	return 0;
 }
 
-
 static int enum_mbus_code(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_mbus_code_enum *code)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_mbus_code_enum *code)
 {
 	/* Only one bayer order(GRBG) is supported */
 	if (code->index > 0)
@@ -259,24 +264,20 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int enum_frame_size(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_pad_config *cfg,
-				   struct v4l2_subdev_frame_size_enum *fse)
+			   struct v4l2_subdev_pad_config *cfg,
+			   struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index >= ARRAY_SIZE(supported_modes)) {
-		printk("[gc4653] error fse index!\n");
-		return -EINVAL;
-	}
+	struct gc4653 *gc4653 = to_gc4653(sd);
 
-	fse->min_width = supported_modes[fse->index].width;
-	fse->max_width = supported_modes[fse->index].max_width;
-	fse->min_height = supported_modes[fse->index].height;
-	fse->max_height = supported_modes[fse->index].max_height;
+	fse->min_width = gc4653->cur_mode->width;
+	fse->max_width = gc4653->cur_mode->max_width;
+	fse->min_height = gc4653->cur_mode->height;
+	fse->max_height = gc4653->cur_mode->max_height;
 
 	return 0;
 }
 
-static void update_pad_format(const struct gc4653_mode *mode,
-				      struct v4l2_subdev_format *fmt)
+static void update_pad_format(const struct gc4653_mode *mode, struct v4l2_subdev_format *fmt)
 {
 	fmt->format.width = mode->width;
 	fmt->format.height = mode->height;
@@ -285,19 +286,18 @@ static void update_pad_format(const struct gc4653_mode *mode,
 }
 
 static int get_pad_format(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct gc4653 *gc4653 = to_gc4653(sd);
 	struct v4l2_mbus_framefmt *framefmt;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&gc4653->mutex);
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		framefmt = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 		fmt->format = *framefmt;
-		mutex_unlock(&gc4653->mutex);
-		return -ENOTTY;
+		ret = -ENOTTY;
 	} else {
 		update_pad_format(gc4653->cur_mode, fmt);
 	}
@@ -307,11 +307,11 @@ static int get_pad_format(struct v4l2_subdev *sd,
 }
 
 static int set_pad_format(struct v4l2_subdev *sd,
-		       struct v4l2_subdev_pad_config *cfg,
-		       struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct gc4653 *gc4653 = to_gc4653(sd);
-	const struct gc4653_mode *mode;
+	struct gc4653_mode *mode;
 	struct v4l2_mbus_framefmt *framefmt;
 
 	mutex_lock(&gc4653->mutex);
@@ -340,13 +340,11 @@ static int set_pad_format(struct v4l2_subdev *sd,
 static void gc4653_standby(struct gc4653 *gc4653)
 {
 	gc4653_write_reg(gc4653, 0x0100, REG_VALUE_08BIT, 0x00);
-	printk("[gc4653] standby\n");
 }
 
 static void gc4653_restart(struct gc4653 *gc4653)
 {
 	gc4653_write_reg(gc4653, 0x0100, REG_VALUE_08BIT, 0x01);
-	printk("[gc4653] restart\n");
 }
 
 /* Start streaming */
@@ -354,32 +352,38 @@ static int start_streaming(struct gc4653 *gc4653)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&gc4653->sd);
 	const struct gc4653_reg_list *reg_list;
+	const sns_sync_info_t *sync_info;
 	int ret;
 
-	/* Apply default values of current mode */
-	reg_list = &gc4653->cur_mode->reg_list;
+	if (gc4653->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+		reg_list = &gc4653->cur_mode->reg_list;
+	}
+
 	ret = gc4653_write_regs(gc4653, reg_list->regs, reg_list->num_of_regs);
 	if (ret) {
 		dev_err(&client->dev, "%s failed to set mode\n", __func__);
 		return ret;
 	}
 
-	if (g_sns_sync_info.num_of_regs > 0) {
-		ret = gc4653_write_regs(gc4653, (struct gc4653_reg *)g_sns_sync_info.regs,
-				g_sns_sync_info.num_of_regs);
+	sync_info = &gc4653->cur_mode->gc4653_sync_info;
+
+	if (sync_info->num_of_regs > 0) {
+		ret = gc4653_write_regs(gc4653, (struct gc4653_reg *)sync_info->regs,
+					sync_info->num_of_regs);
 		if (ret) {
 			dev_err(&client->dev, "%s failed to set default\n", __func__);
 			return ret;
 		}
 	}
 
-	usleep_range(100 * 1000, 120 * 2000);
+
+	usleep_range(100 * 1000, 200 * 1000);
 	/* Apply customized values from user */
 	ret =  __v4l2_ctrl_handler_setup(gc4653->sd.ctrl_handler);
 	if (ret)
 		return ret;
 
-	printk("[gc4653] init reg done\n");
+	dev_info(&client->dev, "wdr_mode(%d) reg setting done\n", gc4653->cur_mode->mipi_wdr_mode);
 
 	return ret;
 }
@@ -396,8 +400,6 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	struct gc4653 *gc4653 = to_gc4653(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0;
-
-	printk("[gc4653] set stream(%d)\n", enable);
 
 	mutex_lock(&gc4653->mutex);
 	if (gc4653->streaming == enable) {
@@ -427,7 +429,7 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	gc4653->streaming = enable;
 	mutex_unlock(&gc4653->mutex);
 
-	printk("[gc4653] set stream success\n");
+	dev_info(&client->dev, "set stream(%d) success\n", enable);
 
 	return ret;
 
@@ -477,19 +479,19 @@ static int gc4653_identify_module(struct gc4653 *gc4653)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&gc4653->sd);
 	int ret;
-	int nVal, nVal2, nVal3;
+	int val1, val2;
 	int read_data = 0;
 
 	ret = gc4653_read_reg(gc4653, GC4653_CHIP_ID_ADDR_H,
-			       REG_VALUE_08BIT, &nVal);
-	printk("[gc4653] read id:0x%x, ret:%d", nVal, ret);
+			       REG_VALUE_08BIT, &val1);
+	dev_info(&client->dev, "read id:0x%x, ret:%d", val1, ret);
 	if (ret)
 		return ret;
 
 	ret = gc4653_read_reg(gc4653, GC4653_CHIP_ID_ADDR_L,
-			       REG_VALUE_08BIT, &nVal3);
+			       REG_VALUE_08BIT, &val2);
 
-	read_data = ((nVal & 0xFF) << 8) | (nVal3 & 0xFF);
+	read_data = ((val1 & 0xFF) << 8) | (val2 & 0xFF);
 
 	if (read_data != GC4653_CHIP_ID) {
 		dev_err(&client->dev, "chip id(%x) mismatch, read(%x)\n",
@@ -504,7 +506,8 @@ static void gc4653_mirror_flip(struct gc4653 *gc4653, int orient)
 {
 	int val = 0;
 	int ori_addr = 0x3820;
-	printk("[gc4653] set mirror_flip:%d", orient);
+
+	pr_info("set mirror_flip:%d", orient);
 
 	gc4653_read_reg(gc4653, ori_addr, REG_VALUE_08BIT, &val);
 
@@ -532,6 +535,54 @@ static void gc4653_mirror_flip(struct gc4653 *gc4653, int orient)
 	gc4653_restart(gc4653);
 }
 
+static int gc4653_update_link_menu(struct gc4653 *gc4653)
+{
+	struct i2c_client *client = v4l2_get_subdevdata(&gc4653->sd);
+	struct v4l2_ctrl_handler *ctrl_hdlr;
+	struct v4l2_ctrl *ctrl;
+	int wdr_index = SNS_CFG_TYPE_WDR_MODE;
+	int id = gc4653->module_index;
+	int ret;
+	int i;
+
+	gc4653_link_cif_menu[id][wdr_index] = gc4653->cur_mode->mipi_wdr_mode;
+
+	dev_info(&client->dev, "update mipi_mode:%lld", gc4653_link_cif_menu[id][wdr_index]);
+
+	ctrl_hdlr = gc4653->sd.ctrl_handler;
+	v4l2_ctrl_handler_free(ctrl_hdlr);
+
+	ret = v4l2_ctrl_handler_init(ctrl_hdlr, 10);
+	if (ret) {
+		dev_err(&client->dev, "%s ctrl handler init failed (%d)\n",
+			__func__, ret);
+		return ret;
+	}
+
+	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &gc4653_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      gc4653_link_cif_menu[id][i], 0,
+					       (const s64 *)gc4653_link_cif_menu[id]);
+
+		if (ctrl)
+			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
+	}
+
+	if (ctrl_hdlr->error) {
+		ret = ctrl_hdlr->error;
+		dev_err(&client->dev, "%s new int menu failed (%d)\n",
+			__func__, ret);
+		goto error;
+	}
+
+	return 0;
+
+error:
+	v4l2_ctrl_handler_free(ctrl_hdlr);
+
+	return ret;
+}
+
 static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct gc4653 *gc4653 = to_gc4653(sd);
@@ -540,7 +591,13 @@ static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	switch (cmd) {
 	case SNS_V4L2_GET_TYPE:
 	{
-		int type = gc4653_sns_type;
+		int type = 0;
+
+		if (gc4653->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+			type = GC4653_SNS_TYPE_SDR;
+		} else {//wdr
+			type = GC4653_SNS_TYPE_WDR;
+		}
 		memcpy(arg, &type, sizeof(int));
 		break;
 	}
@@ -548,6 +605,7 @@ static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_MIRROR_FLIP:
 	{
 		int orient = 0;
+
 		memcpy(&orient, arg, sizeof(int));
 		gc4653_mirror_flip(gc4653, orient);
 		break;
@@ -557,21 +615,37 @@ static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		struct i2c_client *client = v4l2_get_subdevdata(&gc4653->sd);
 		sns_i2c_info_t i2c_info;
+
 		i2c_info.i2c_addr =  client->addr;
 		i2c_info.i2c_idx  =  client->adapter->i2c_idx;
 		memcpy(arg, &i2c_info, sizeof(sns_i2c_info_t));
 		break;
 	}
 
+	case SNS_V4L2_SET_HDR_ON:
+	{
+		int hdr_on = 0;
+		struct i2c_client *client = v4l2_get_subdevdata(&gc4653->sd);
+
+		memcpy(&hdr_on, arg, sizeof(int));
+
+		if (hdr_on)
+			dev_warn(&client->dev, "Not support HDR!\n");
+		else
+			gc4653->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+
+		gc4653_update_link_menu(gc4653);
+		break;
+	}
+
 	case SNS_V4L2_SET_SNS_SYNC_INFO:
 	{
-		memcpy(&g_sns_sync_info, arg, sizeof(sns_sync_info_t));
+		memcpy(&gc4653->cur_mode->gc4653_sync_info, arg, sizeof(sns_sync_info_t));
 		break;
 	}
 
 	default:
 		ret = -ENOIOCTLCMD;
-		printk("[gc4653] unknown ioctl cmd:%d", cmd);
 		break;
 	}
 
@@ -584,7 +658,6 @@ static long gc4653_compat_ioctl32(struct v4l2_subdev *sd,
 {
 	void __user *up = compat_ptr(arg);
 	long ret;
-	printk("[gc4653] compat ioctl cmd:%d", cmd);
 
 	switch (cmd) {
 	default:
@@ -595,7 +668,6 @@ static long gc4653_compat_ioctl32(struct v4l2_subdev *sd,
 	return ret;
 }
 #endif
-
 
 static const struct v4l2_subdev_core_ops gc4653_core_ops = {
 	.ioctl = gc4653_ioctl,
@@ -651,11 +723,13 @@ static int gc4653_init_controls(struct gc4653 *gc4653, int index_id)
 	mutex_init(&gc4653->mutex);
 	ctrl_hdlr->lock = &gc4653->mutex;
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&gc4653_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					gc4653_link_cif_menu[index_id][i], 0,
-					gc4653_link_cif_menu[index_id]);
+		if (i == SNS_CFG_TYPE_WDR_MODE)
+			gc4653->cur_mode->mipi_wdr_mode = gc4653_link_cif_menu[index_id][i];
+
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &gc4653_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      gc4653_link_cif_menu[index_id][i], 0,
+					       (const s64 *)gc4653_link_cif_menu[index_id]);
+
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 	}
@@ -704,35 +778,30 @@ static int gc4653_probe(struct i2c_client *client,
 	int bus_id;
 	int ret = -1;
 	int i;
-	memset(&g_sns_sync_info, 0, sizeof(g_sns_sync_info));
 
-	printk("[gc4653] probe id[%d] start\n", gc4653_probe_index);
+	dev_info(dev, "probe id[%d] start\n", gc4653_probe_index);
 
 	gc4653_probe_index++;
 
 	if (index_id >= MAX_SENSOR_DEVICE || index_id < 0) {
-		printk("[gc4653] invalid devid(%d)\n", index_id);
+		dev_info(dev, "invalid devid(%d)\n", index_id);
 		return ret;
 	}
 
 	gc4653 = devm_kzalloc(&client->dev, sizeof(*gc4653), GFP_KERNEL);
-	if (!gc4653) {
-		dev_err(dev, "Failed to alloc devmem!\n");
+	if (!gc4653)
 		return -ENOMEM;
-	}
 
 	sd = &gc4653->sd;
 
 	for (i = 0; i < addr_num; i++) {
-		if (force_bus[index_id] < 0) {
+		if (force_bus[index_id] < 0)
 			bus_id = gc4653_bus_map[index_id];
-		} else {
+		else
 			bus_id = force_bus[index_id];
-		}
 
-		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM) {
+		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM)
 			return ret;
-		}
 
 		client->addr = gc4653_i2c_list[i];
 		client->adapter = i2c_get_adapter(bus_id);
@@ -742,43 +811,39 @@ static int gc4653_probe(struct i2c_client *client,
 		/* Check module identity */
 		ret = gc4653_identify_module(gc4653);
 		if (ret) {
-			printk("id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
-				index_id, bus_id, i, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
+				 index_id, bus_id, i, client->addr);
 
-			if (i == addr_num - 1) {
+			if (i == addr_num - 1)
 				return ret;
-			}
-			continue;;
+
+			continue;
 		} else {
-			printk("id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
-				index_id, bus_id, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
+				 index_id, bus_id, client->addr);
 			break;
 		}
 	}
 
 	gc4653->module_index = index_id;
 
-	/* Set default mode to max resolution */
 	if (index_id >= ARRAY_SIZE(supported_modes)) {
 		gc4653->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct gc4653_mode), GFP_KERNEL);
-
-		memcpy(gc4653->cur_mode, &supported_modes[0],
-					sizeof(struct gc4653_mode));
+						 sizeof(struct gc4653_mode), GFP_KERNEL);
+		memcpy(gc4653->cur_mode, &supported_modes[0], sizeof(struct gc4653_mode));
 	} else {
 		gc4653->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct gc4653_mode), GFP_KERNEL);
-
-		memcpy(gc4653->cur_mode, &supported_modes[index_id],
-					sizeof(struct gc4653_mode));
+						 sizeof(struct gc4653_mode), GFP_KERNEL);
+		memcpy(gc4653->cur_mode, &supported_modes[index_id], sizeof(struct gc4653_mode));
 	}
+
+	memset(&gc4653->cur_mode->gc4653_sync_info, 0, sizeof(sns_sync_info_t));
 
 	mutex_init(&gc4653->mutex);
 
 	ret = gc4653_init_controls(gc4653, index_id);
-	if (ret) {
+	if (ret)
 		return ret;
-	}
 
 	/* Initialize subdev */
 	sd->internal_ops = &gc4653_internal_ops;
@@ -811,7 +876,7 @@ static int gc4653_probe(struct i2c_client *client,
 	pm_runtime_enable(&client->dev);
 	pm_runtime_idle(&client->dev);
 
-	printk("[gc4653] sensor_%d probe success\n", index_id);
+	dev_info(dev, "sensor_%d probe success\n", index_id);
 
 	return 0;
 
@@ -869,7 +934,8 @@ static struct i2c_driver gc4653_i2c_driver = {
 
 static int __init sensor_mod_init(void)
 {
-	printk("== gc4653 mod add ==\n");
+	pr_info("== gc4653 mod add ==\n");
+
 	return i2c_add_driver(&gc4653_i2c_driver);
 }
 

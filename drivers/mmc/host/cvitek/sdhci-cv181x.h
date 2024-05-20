@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * drivers/mmc/host/sdhci-cvi.c - CVITEK SDHCI Platform driver
  *

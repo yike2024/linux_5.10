@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _SENSOR_REG_H_
 #define _SENSOR_REG_H_
 
@@ -11,7 +12,7 @@ struct gc4653_reg {
 
 /* Menu items for LINK_FREQ V4L2 control */
 /* See V4L2_SNS_CFG_TYPE*/
-static const s64 gc4653_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
+static s64 gc4653_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 	{//s0 linear mode
 		SNS_CFG_TYPE_MAX,
 		CAMPLL_FREQ_25M,        //1:mclk freq

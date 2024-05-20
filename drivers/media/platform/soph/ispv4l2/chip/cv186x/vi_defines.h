@@ -97,6 +97,7 @@ struct cvi_vi_dev {
 	struct cvi_isp_snr_info	snr_info[ISP_PRERAW_MAX];
 	atomic_t		isp_raw_dump_en[ISP_PRERAW_MAX];
 	atomic_t		isp_smooth_raw_dump_en[ISP_PRERAW_MAX];
+	atomic_t		isp_err_times[ISP_PRERAW_MAX];
 	u32			isp_int_flag[ISP_PRERAW_MAX];
 	wait_queue_head_t	isp_int_wait_q[ISP_PRERAW_MAX];
 	wait_queue_head_t	isp_dq_wait_q[VI_MAX_CHN_NUM];

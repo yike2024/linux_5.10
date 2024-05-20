@@ -181,12 +181,12 @@ config BT_HCIUART_3WIRE
 	  Say Y here to compile support for Three-wire UART protocol.
 
 config BT_HCIUART_RTL3WIRE
-        tristate "Realtek Three-wire UART (H5) protocol support"
-        help
-          Realtek Three-wire UART (H5) transport layer makes it possible
-          to use Realtek Bluetooth controller with Three-wire UART.
+	tristate "Realtek Three-wire UART (H5) protocol support"
+	help
+	  Realtek Three-wire UART (H5) transport layer makes it possible
+	  to use Realtek Bluetooth controller with Three-wire UART.
 
-          Say Y here to compile support for Realtek Three-wire UART.
+	  Say Y here to compile support for Realtek Three-wire UART.
 
 config BT_HCIUART_INTEL
 	bool "Intel protocol support"

@@ -270,4 +270,14 @@ config SPRD_EFUSE
 	  This driver can also be built as a module. If so, the module
 	  will be called nvmem-sprd-efuse.
 
+config SOPHON_OTP
+	tristate "Sophon OTP controller support"
+	depends on ARCH_CV186X
+	default y
+	help
+		Select this driver for sophon A2 secure otp
+		This driver is used for program and read otp
+		This driver can also be built as a module
+		But build-in is better.
+
 endif

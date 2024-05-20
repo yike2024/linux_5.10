@@ -57,3 +57,12 @@ void extend_axi_to_36bit(u32 high_bit, enum drm_intf intf)
 	}
 }
 
+void reset_disp(void)
+{
+	/*ip and apb reset*/
+	_reg_write_mask(REG_VO_SYS_IP_RESET, 0xC0, 0xC0);
+	_reg_write_mask(REG_VO_SYS_APB_RESET, 0xC0, 0xC0);
+	udelay(10);
+	_reg_write_mask(REG_VO_SYS_IP_RESET, 0xC0, 0x00);
+	_reg_write_mask(REG_VO_SYS_APB_RESET, 0xC0, 0x00);
+}

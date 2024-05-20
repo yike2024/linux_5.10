@@ -3328,6 +3328,9 @@ static void _isp_yuv_bypass_trigger(struct cvi_vi_dev *vdev, const enum cvi_isp_
 	struct isp_ctx *ctx = &vdev->ctx;
 	u8 buf_chn;
 
+	if (atomic_read(&vdev->isp_err_handle_flag) == 1)
+		return;
+
 	if (atomic_read(&vdev->isp_streamoff) == 0) {
 		if (atomic_cmpxchg(&vdev->pre_fe_state[raw_num][hw_chn_num],
 					ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
@@ -3687,9 +3690,9 @@ void _vi_scene_ctrl(struct cvi_vi_dev *vdev)
 		}
 
 		if (rgb_snsr_num == 1) { //rgb+yuv
-			ctx->is_offline_be = false;
-			ctx->is_offline_postraw = true;
-			ctx->is_slice_buf_on = true;
+			ctx->is_offline_be = true;
+			ctx->is_offline_postraw = false;
+			ctx->is_slice_buf_on = false;
 			/*
 			// if 422to420, chnAttr must be NV21
 			if (ctx->isp_pipe_cfg[ISP_PRERAW1].muxMode == VI_WORK_MODE_1Multiplex &&
@@ -5987,6 +5990,7 @@ static void _vi_sw_init(struct cvi_vi_dev *vdev)
 
 		atomic_set(&vdev->isp_raw_dump_en[i], 0);
 		atomic_set(&vdev->isp_smooth_raw_dump_en[i], 0);
+		atomic_set(&vdev->isp_err_times[i], 0);
 	}
 
 	for (i = 0; i < ISP_SPLT_MAX; i++) {
@@ -6582,10 +6586,61 @@ static void _vi_show_debug_info(void)
 	gOverflowInfo = NULL;
 }
 
+static void _vi_err_retrig_pre_fe(struct cvi_vi_dev *vdev)
+{
+	struct isp_ctx *ctx = &vdev->ctx;
+	enum cvi_isp_raw raw_num;
+	enum cvi_isp_fe_chn_num fe_max, fe_chn;
+	unsigned long flags;
+	u8 buf_chn;
+
+	if (!_is_be_post_online(ctx))
+		return;
+
+	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		if (!ctx->isp_pipe_enable[raw_num])
+			continue;
+		if (atomic_read(&vdev->isp_err_times[raw_num]) > 30) {
+			vi_pr(VI_ERR, "raw_%d too much errors happened\n", raw_num);
+			continue;
+		}
+
+		vi_pr(VI_WARN, "fe_%d trig retry %d times\n", raw_num, atomic_read(&vdev->isp_err_times[raw_num]));
+
+		//yuv sensor offline2sc
+		if (ctx->isp_pipe_cfg[raw_num].is_yuv_sensor && ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
+			fe_max = ctx->isp_pipe_cfg[raw_num].muxMode;
+			for (fe_chn = ISP_FE_CH0; fe_chn <= fe_max; fe_chn++) {
+				buf_chn = vdev->ctx.raw_chnstr_num[raw_num] + fe_chn;
+				if (atomic_read(&vdev->isp_err_times[raw_num])) {
+					spin_lock_irqsave(&vdev->qbuf_lock, flags);
+					vdev->qbuf_num[buf_chn]++;
+					spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
+				}
+
+				if (cvi_isp_rdy_buf_empty(vdev, buf_chn)) {
+					vi_pr(VI_INFO, "fe_%d chn_%d yuv bypass outbuf is empty\n", raw_num, buf_chn);
+				} else {
+					_isp_yuv_bypass_trigger(vdev, raw_num, fe_chn);
+				}
+			}
+		} else { //rgb senosr or yuv sensor online2sc
+			fe_max = ctx->isp_pipe_cfg[raw_num].is_hdr_on
+				     ? ISP_FE_CH1
+				     : ctx->isp_pipe_cfg[raw_num].muxMode;
+			for (fe_chn = ISP_FE_CH0; fe_chn <= fe_max; fe_chn++) {
+				_pre_hw_enque(vdev, raw_num, fe_chn);
+			}
+		}
+	}
+}
+
 void _vi_err_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw err_raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	int i, j, count = 10;
+	enum cvi_isp_raw raw_num;
+	enum cvi_isp_fe_chn_num fe_chn;
+	int count = 10;
 	bool fe_idle, be_idle, post_idle;
 
 	//Stop pre/postraw trigger go
@@ -6597,41 +6652,32 @@ void _vi_err_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw err_raw_num
 	//step 2 : wait to make sure post and the other fe is done.
 	while (--count > 0) {
 		if (_is_be_post_online(ctx)) {
-			if (ctx->is_multi_sensor) {
-				fe_idle = be_idle = post_idle = true;
+			fe_idle = be_idle = post_idle = true;
 
-				for (i = ISP_PRERAW0; i < ISP_PRERAW_MAX; i++) {
-					if (!vdev->ctx.isp_pipe_enable[i])
-						continue;
-					if (i == err_raw_num)
-						continue;
-					for (j = ISP_FE_CH0; j < ISP_FE_CHN_MAX; j++) {
-						if (!(atomic_read(&vdev->pre_fe_state[i][j]) == ISP_STATE_IDLE)) {
-							fe_idle = false;
-							break;
-						}
+			for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+				if (!vdev->ctx.isp_pipe_enable[raw_num])
+					continue;
+				if (atomic_read(&vdev->isp_err_times[raw_num]) && count < 5)
+					continue;
+				for (fe_chn = ISP_FE_CH0; fe_chn < ISP_FE_CHN_MAX; fe_chn++) {
+					if (atomic_read(&vdev->pre_fe_state[raw_num][fe_chn]) != ISP_STATE_IDLE) {
+						fe_idle = false;
+						break;
 					}
 				}
-
-				if (!(atomic_read(&vdev->pre_be_state[ISP_BE_CH0]) == ISP_STATE_IDLE &&
-					atomic_read(&vdev->pre_be_state[ISP_BE_CH1]) == ISP_STATE_IDLE))
-					be_idle = false;
-
-				if (!(atomic_read(&vdev->postraw_state) == ISP_STATE_IDLE))
-					post_idle = false;
-
-				if ((fe_idle == true) && (be_idle == true) && (post_idle == true))
-					break;
-
-				vi_pr(VI_WARN, "wait fe/be/post idle count(%d) for be_post_online\n", count);
-			} else {
-				if (atomic_read(&vdev->postraw_state) == ISP_STATE_IDLE &&
-				    atomic_read(&vdev->pre_be_state[ISP_BE_CH0]) == ISP_STATE_IDLE &&
-				    atomic_read(&vdev->pre_be_state[ISP_BE_CH1]) == ISP_STATE_IDLE)
-					break;
-
-				vi_pr(VI_WARN, "wait be/post idle count(%d) for be_post_online\n", count);
 			}
+
+			if (!(atomic_read(&vdev->pre_be_state[ISP_BE_CH0]) == ISP_STATE_IDLE &&
+				atomic_read(&vdev->pre_be_state[ISP_BE_CH1]) == ISP_STATE_IDLE))
+				be_idle = false;
+
+			if (!(atomic_read(&vdev->postraw_state) == ISP_STATE_IDLE))
+				post_idle = false;
+
+			if (fe_idle && be_idle && post_idle)
+				break;
+
+			vi_pr(VI_WARN, "wait fe/be/post idle count(%d) for be_post_online\n", count);
 		} else if (_is_fe_be_online(ctx) && !ctx->is_slice_buf_on) {
 			if (atomic_read(&vdev->postraw_state) == ISP_STATE_IDLE)
 				break;
@@ -6681,12 +6727,16 @@ void _vi_err_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw err_raw_num
 				atomic_read(&vdev->pre_be_state[ISP_BE_CH0]),
 				atomic_read(&vdev->pre_be_state[ISP_BE_CH1]),
 				atomic_read(&vdev->postraw_state));
-		return;
 	}
 
 	//step 3 : set csibdg sw abort and wait abort done
-	if (isp_frm_err_handler(ctx, err_raw_num, 3) < 0)
-		return;
+	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		if (!vdev->ctx.isp_pipe_enable[raw_num])
+			continue;
+
+		if (isp_frm_err_handler(ctx, raw_num, 3) < 0)
+			return;
+	}
 
 	//step 4 : isp sw reset and vip reset pull up
 	isp_frm_err_handler(ctx, err_raw_num, 4);
@@ -6700,10 +6750,12 @@ void _vi_err_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw err_raw_num
 
 	//step 7 : reset sw state to idle
 	if (_is_be_post_online(ctx)) {
-		atomic_set(&vdev->pre_fe_state[err_raw_num][ISP_FE_CH0], ISP_STATE_IDLE);
-		atomic_set(&vdev->pre_fe_state[err_raw_num][ISP_FE_CH1], ISP_STATE_IDLE);
-		atomic_set(&vdev->pre_fe_state[err_raw_num][ISP_FE_CH2], ISP_STATE_IDLE);
-		atomic_set(&vdev->pre_fe_state[err_raw_num][ISP_FE_CH3], ISP_STATE_IDLE);
+		for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+			atomic_set(&vdev->pre_fe_state[raw_num][ISP_FE_CH0], ISP_STATE_IDLE);
+			atomic_set(&vdev->pre_fe_state[raw_num][ISP_FE_CH1], ISP_STATE_IDLE);
+			atomic_set(&vdev->pre_fe_state[raw_num][ISP_FE_CH2], ISP_STATE_IDLE);
+			atomic_set(&vdev->pre_fe_state[raw_num][ISP_FE_CH3], ISP_STATE_IDLE);
+		}
 	} else if (_is_fe_be_online(ctx) && !ctx->is_slice_buf_on) {
 		atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_STATE_IDLE);
 		atomic_set(&vdev->pre_be_state[ISP_BE_CH1], ISP_STATE_IDLE);
@@ -6730,6 +6782,9 @@ void _vi_err_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw err_raw_num
 
 	//Let postraw trigger go
 	atomic_set(&vdev->isp_err_handle_flag, 0);
+
+	//retrig pre_fe
+	_vi_err_retrig_pre_fe(vdev);
 }
 
 static int _vi_err_handler_thread(void *arg)
@@ -6760,6 +6815,31 @@ static int _vi_err_handler_thread(void *arg)
 
 static inline void vi_err_wake_up_th(struct cvi_vi_dev *vdev, enum cvi_isp_raw err_raw)
 {
+	struct isp_ctx *ctx = &vdev->ctx;
+	enum cvi_isp_fe_chn_num fe_chn = ISP_FE_CH0;
+	enum cvi_isp_fe_chn_num fe_max = ctx->isp_pipe_cfg[err_raw].is_hdr_on
+					? ISP_FE_CH1
+					: ctx->isp_pipe_cfg[err_raw].muxMode;
+
+	//record err_num;
+	atomic_add(1, &vdev->isp_err_times[err_raw]);
+
+	for (fe_chn = ISP_FE_CH0; fe_chn <= fe_max; fe_chn++) {
+		vi_pr(VI_WARN, "dbg_0=0x%x, dbg_1=0x%x, dbg_2=0x%x, dbg_3=0x%x\n",
+		      ctx->isp_pipe_cfg[err_raw].dg_info.bdg_chn_debug[fe_chn].dbg_0,
+		      ctx->isp_pipe_cfg[err_raw].dg_info.bdg_chn_debug[fe_chn].dbg_1,
+		      ctx->isp_pipe_cfg[err_raw].dg_info.bdg_chn_debug[fe_chn].dbg_2,
+		      ctx->isp_pipe_cfg[err_raw].dg_info.bdg_chn_debug[fe_chn].dbg_3);
+	}
+
+	//Stop pre/postraw trigger go
+	if (atomic_read(&vdev->isp_err_handle_flag) == 1) {
+		vi_pr(VI_WARN, "err_handler running\n");
+		return;
+	}
+
+	atomic_set(&vdev->isp_err_handle_flag, 1);
+
 	vdev->vi_th[E_VI_TH_ERR_HANDLER].flag = err_raw + 1;
 
 	wake_up(&vdev->vi_th[E_VI_TH_ERR_HANDLER].wq);
@@ -6775,60 +6855,57 @@ u32 isp_err_chk(
 	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	enum cvi_isp_fe_chn_num fe_chn = ISP_FE_CH0;
 
-	if (cbdg_1_sts[raw_num].bits.FIFO_OVERFLOW_INT) {
-		vi_pr(VI_ERR, "CSIBDG_A fifo overflow\n");
-		_vi_record_debug_info(ctx);
-		ctx->isp_pipe_cfg[raw_num].dg_info.bdg_fifo_of_cnt++;
-		vi_err_wake_up_th(vdev, raw_num);
-		ret = -1;
-	}
-
-	if (cbdg_1_sts[raw_num].bits.FRAME_RESOLUTION_OVER_MAX_INT) {
-		vi_pr(VI_ERR, "CSIBDG_A frm size over max\n");
-		ret = -1;
-	}
-
-	if (cbdg_1_sts[raw_num].bits.DMA_ERROR_INT) {
-		u32 wdma_0_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_0_err_sts;
-		u32 wdma_1_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_1_err_sts;
-		u32 wdma_2_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_2_err_sts;
-		u32 wdma_3_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_3_err_sts;
-		u32 rdma_0_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_0_err_sts;
-		u32 rdma_1_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_1_err_sts;
-		u32 wdma_0_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_0_idle;
-		u32 wdma_1_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_1_idle;
-		u32 wdma_2_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_2_idle;
-		u32 wdma_3_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_3_idle;
-		u32 rdma_0_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_0_idle;
-		u32 rdma_1_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_1_idle;
-
-		if ((wdma_0_err & 0x10) || (wdma_1_err & 0x10) ||
-		    (wdma_2_err & 0x10) || (wdma_3_err & 0x10) ||
-		    (rdma_0_err & 0x10) || (rdma_1_err & 0x10)) {
-			vi_pr(VI_ERR, "DMA axi error\n");
-			vi_pr(VI_ERR, "Err status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)] rdma[0(0x%x) 1(0x%x)]\n",
-					wdma_0_err, wdma_1_err, wdma_2_err, wdma_3_err, rdma_0_err, rdma_1_err);
-			ret = -1;
-		} else if ((wdma_0_err & 0x20) || (wdma_1_err & 0x20) ||
-			   (wdma_2_err & 0x20) || (wdma_3_err & 0x20) ||
-			   (rdma_0_err & 0x20) || (rdma_1_err & 0x20)) {
-			vi_pr(VI_ERR, "DMA axi mismatch\n");
-			vi_pr(VI_ERR, "Err status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)] rdma[0(0x%x) 1(0x%x)]\n",
-					wdma_0_err, wdma_1_err, wdma_2_err, wdma_3_err, rdma_0_err, rdma_1_err);
-			vi_pr(VI_ERR, "Idle status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)] rdma[0(0x%x) 1(0x%x)]\n",
-					wdma_0_idle, wdma_1_idle, wdma_2_idle, wdma_3_idle, rdma_0_idle, rdma_1_idle);
-			ret = -1;
-		} else if ((wdma_0_err & 0x40) || (wdma_1_err & 0x40) ||
-			   (wdma_2_err & 0x40) || (wdma_3_err & 0x40)) {
-			vi_pr(VI_WARN, "WDMA buffer full\n");
-			vi_pr(VI_ERR, "Err status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)]\n",
-					wdma_0_err, wdma_1_err, wdma_2_err, wdma_3_err);
-		}
-	}
-
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
+
+		if (cbdg_1_sts[raw_num].bits.FIFO_OVERFLOW_INT) {
+			vi_pr(VI_ERR, "CSIBDG_%d fifo overflow\n", raw_num);
+			_vi_record_debug_info(ctx);
+			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_fifo_of_cnt++;
+			vi_err_wake_up_th(vdev, raw_num);
+			ret = -1;
+		}
+
+		if (cbdg_1_sts[raw_num].bits.FRAME_RESOLUTION_OVER_MAX_INT) {
+			vi_pr(VI_ERR, "CSIBDG_%d frm size over max\n", raw_num);
+			ret = -1;
+		}
+
+		if (cbdg_1_sts[raw_num].bits.DMA_ERROR_INT) {
+			u32 wdma_0_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_0_err_sts;
+			u32 wdma_1_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_1_err_sts;
+			u32 wdma_2_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_2_err_sts;
+			u32 wdma_3_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_3_err_sts;
+			u32 rdma_0_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_0_err_sts;
+			u32 rdma_1_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_1_err_sts;
+			u32 wdma_0_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_0_idle;
+			u32 wdma_1_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_1_idle;
+			u32 wdma_2_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_2_idle;
+			u32 wdma_3_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_3_idle;
+			u32 rdma_0_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_0_idle;
+			u32 rdma_1_idle = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.rdma_1_idle;
+
+			if ((wdma_0_err & 0x10) || (wdma_1_err & 0x10) ||
+			(wdma_2_err & 0x10) || (wdma_3_err & 0x10) ||
+			(rdma_0_err & 0x10) || (rdma_1_err & 0x10)) {
+				vi_pr(VI_ERR, "DMA axi error\n");
+				ret = -1;
+			} else if ((wdma_0_err & 0x20) || (wdma_1_err & 0x20) ||
+				(wdma_2_err & 0x20) || (wdma_3_err & 0x20) ||
+				(rdma_0_err & 0x20) || (rdma_1_err & 0x20)) {
+				vi_pr(VI_ERR, "DMA axi mismatch\n");
+				ret = -1;
+			} else if ((wdma_0_err & 0x40) || (wdma_1_err & 0x40) ||
+				(wdma_2_err & 0x40) || (wdma_3_err & 0x40)) {
+				vi_pr(VI_WARN, "WDMA buffer full\n");
+			}
+
+			vi_pr(VI_WARN, "Err status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)] rdma[0(0x%x) 1(0x%x)]\n",
+					wdma_0_err, wdma_1_err, wdma_2_err, wdma_3_err, rdma_0_err, rdma_1_err);
+			vi_pr(VI_WARN, "Idle status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)] rdma[0(0x%x) 1(0x%x)]\n",
+					wdma_0_idle, wdma_1_idle, wdma_2_idle, wdma_3_idle, rdma_0_idle, rdma_1_idle);
+		}
 
 		fe_chn = ISP_FE_CH0;
 
@@ -7319,6 +7396,11 @@ static inline void _isp_pre_fe_done_handler(
 	struct isp_ctx *ctx = &vdev->ctx;
 	enum cvi_isp_raw raw_num = hw_raw_num;
 	bool trigger = false;
+
+	//reset error times when fe_done
+	if (unlikely(atomic_read(&vdev->isp_err_times[raw_num]))) {
+		atomic_set(&vdev->isp_err_times[raw_num], 0);
+	}
 
 	if (ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) {
 		if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_BYPASS) {

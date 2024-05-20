@@ -1,7 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) Cvitek Co., Ltd. 2019-2020. All rights reserved.
  *
- * File Name: cvitek_ion.c
  * Description:
  */
 
@@ -21,9 +21,7 @@
 #include <linux/mm.h>
 #include <linux/swap.h>
 #include <linux/version.h>
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
 #include <linux/dma-map-ops.h>
-#endif
 
 #include "../ion.h"
 #include "../../uapi/ion_cvitek.h"
@@ -348,7 +346,7 @@ long cvitek_ion_ioctl(struct ion_device *dev, unsigned int cmd, unsigned long ar
 		va = (unsigned long)phys_to_virt(pa);
 		pr_debug("IonInv  va:%lx, pa:%lx\n", va, pa);
 #ifdef CONFIG_ARM
-		invalidate_kernel_vmap_range((void*)va, data.size);
+		invalidate_kernel_vmap_range((void *)va, data.size);
 #else
 		__inval_dcache_area(va, data.size);
 #endif
@@ -410,7 +408,7 @@ long cvitek_ion_ioctl(struct ion_device *dev, unsigned int cmd, unsigned long ar
 		break;
 	}
 	default:
-		pr_debug("cvitek_ion_ioctl fail cmd=%x\n", cmd);
+		pr_debug("%s fail cmd=%x\n", __func__, cmd);
 		return -ENOTTY;
 	}
 

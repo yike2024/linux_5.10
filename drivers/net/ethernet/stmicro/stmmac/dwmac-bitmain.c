@@ -106,6 +106,19 @@ void bm_dwmac_exit(struct platform_device *pdev, void *priv)
 	//clk_disable_unprepare(bsp_priv->gate_clk_ref);
 }
 
+static int bm_dwmac_init(struct platform_device *pdev, void *priv)
+{
+	struct bm_mac *bsp_priv = priv;
+	int ret;
+
+	ret = clk_prepare_enable(bsp_priv->gate_clk_tx);
+	if (ret) {
+		dev_err(&pdev->dev, "tx clock enable failed\n");
+		return ret;
+	}
+
+	return 0;
+}
 static int bm_validate_ucast_entries(struct device *dev, int ucast_entries)
 {
 	int x = ucast_entries;
@@ -212,6 +225,7 @@ static int bm_dwmac_probe(struct platform_device *pdev)
 #endif
 	plat_dat->bsp_priv = bsp_priv;
 	plat_dat->exit = bm_dwmac_exit;
+	plat_dat->init = bm_dwmac_init;
 
 	return 0;
 

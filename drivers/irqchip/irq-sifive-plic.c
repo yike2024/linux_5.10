@@ -327,7 +327,7 @@ static int __init plic_init(struct device_node *node,
 		 * Skip contexts other than external interrupts for our
 		 * privilege level.
 		 */
-		if (parent.args[0] != RV_IRQ_EXT){
+		if (parent.args[0] != RV_IRQ_EXT) {
 			pr_debug("[%s]: %d, irq type: 0x%x\n", __func__, __LINE__, parent.args[0]);
 			continue;
 		}
@@ -390,8 +390,8 @@ done:
 		plic_cpuhp_setup_done = true;
 	}
 
-	pr_info("%pOFP: mapped %d interrupts with %d handlers for"
-		" %d contexts.\n", node, nr_irqs, nr_handlers, nr_contexts);
+	pr_info("%pOFP: mapped %d interrupts with %d handlers for %d contexts.\n",
+		node, nr_irqs, nr_handlers, nr_contexts);
 	return 0;
 
 out_iounmap:

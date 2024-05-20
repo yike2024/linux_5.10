@@ -272,6 +272,25 @@ static void dwi2s_stop(struct cvi_i2s_dev *dev,
 	dev_info(dev->dev,"test[%s]", __func__);
 }
 
+#ifdef CONFIG_PM
+static int cvi_dwi2s_runtime_suspend(struct device *dev)
+{
+	struct cvi_i2s_dev *cvi_dev = dev_get_drvdata(dev);
+
+	if (cvi_dev->capability & CVI_I2S_MASTER)
+		clk_disable(cvi_dev->clk);
+	return 0;
+}
+
+static int cvi_dwi2s_runtime_resume(struct device *dev)
+{
+	struct cvi_i2s_dev *cvi_dev = dev_get_drvdata(dev);
+
+	if (cvi_dev->capability & CVI_I2S_MASTER)
+		clk_enable(cvi_dev->clk);
+	return 0;
+}
+#endif
 
 static int cvi_dwi2s_suspend(struct snd_soc_dai *dai)
 {
@@ -787,58 +806,6 @@ static struct snd_soc_dai_ops cvi_dw_i2s_dai_ops = {
 	.set_tdm_slot = cvi_dwi2s_set_tdm_slot,
 };
 
-/*
-probe:
-1.定义平台设备并申请空间（pdev->dev），定义dai_driver并申请空间（snd_soc_dai_driver）
-2.为dai_driver赋值
-.ops
-.name
-.probe
-3.
-获取资源res信息:platform_get_resource
-若要在内核空间(iis驱动)中访问这段I/O寄存器(IIS)资源需要先建立到内核地址空间的映射:
-devm_ioremap_resource
-
-4.申请中断，实现中断回调函数。
-
-5.给cvi_i2s_dev赋值
-dev->dev
-dev->capability 权限
-dev->quirks
-dev->clk
-
-6.给snd_soc_dai_driver cvi_i2s_dai赋值
-
-7.如果是master mode准备时钟
-master模式配置i2s_tdm_reg寄存器
-I2S_CLK_CTRL0
-
-8.注册组件
-devm_snd_soc_register_component
-
-9.为设备注册一个dmaengine_pcm
-devm_snd_dmaengine_pcm_register
-
-10.添加一个proc信息
-
-11.电源管理
-	pm_runtime_enable(&pdev->dev);
-
-12.完成ops
-static struct snd_soc_dai_ops cvi_dw_i2s_dai_ops = {
-	.startup	= cvi_dwi2s_startup,//snd_soc_dai_set_dma_data设置dma源地址  1
-	.shutdown	= cvi_dwi2s_shutdown,							2
-	.hw_params	= cvi_dwi2s_hw_params,//wlen fifolevel			3
-	.prepare	= cvi_dwi2s_prepare,//tx or rx					4
-	.trigger	= cvi_dwi2s_trigger,//i2s start or stop			5
-	.set_fmt	= cvi_dwi2s_set_fmt,
-	.set_tdm_slot = cvi_dwi2s_set_tdm_slot,
-};
-
-
-
-*/
-
 static int cvi_dw_i2s_probe(struct platform_device *pdev)
 {
     const struct i2s_platform_data *pdata = pdev->dev.platform_data;
@@ -862,8 +829,8 @@ static int cvi_dw_i2s_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	//for kernel version witch is less than 5.10.4
-	//cvi_i2s_dai->suspend = cvi_i2s_suspend;
-	//cvi_i2s_dai->resume = cvi_i2s_resume;
+	//cvi_i2s_dai->suspend = cvi_dwi2s_suspend;
+	//cvi_i2s_dai->resume = cvi_dwi2s_resume;
 	cvi_i2s_dai->ops = &cvi_dw_i2s_dai_ops;
 	cvi_i2s_dai->name = "cvi_dw_i2s_probe";
     cvi_i2s_dai->probe = cvi_dw_i2s_dai_probe;
@@ -928,7 +895,7 @@ static int cvi_dw_i2s_probe(struct platform_device *pdev)
 	else
 		dev->mclk_out = false;
 
-//i2s subsys中配置I2S_CLK_CTRL0
+//i2s subsys set I2S_CLK_CTRL0
 
  	dev_set_drvdata(&pdev->dev, dev);
 	ret = devm_snd_soc_register_component(&pdev->dev, &cvi_dw_i2s_component,
@@ -1004,6 +971,102 @@ static const struct of_device_id cvi_dwi2s_of_match[] = {
 MODULE_DEVICE_TABLE(of, cvi_dwi2s_of_match);
 #endif
 
+#ifdef CONFIG_PM_SLEEP
+static int cvi_dwi2s_pm_suspend(struct device *dev)
+{
+	struct cvi_i2s_dev *i2s_dev = dev_get_drvdata(dev);
+
+	if (!i2s_dev->reg_dwctx) {
+		i2s_dev->reg_dwctx = devm_kzalloc(i2s_dev->dev, sizeof(struct cvi_dwi2s_reg_context), GFP_KERNEL);
+		if (!i2s_dev->reg_dwctx)
+			return -ENOMEM;
+	}
+
+	i2s_dev->reg_dwctx->i2s_dwapb_ier = i2s_read_reg(i2s_dev->i2s_base, DWI2S_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_irer = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX_BLOCK_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_iter = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX_BLOCK_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_cer = i2s_read_reg(i2s_dev->i2s_base, DWI2S_CLK_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_ccr = i2s_read_reg(i2s_dev->i2s_base, DWI2S_CLK_CFG);
+
+	i2s_dev->reg_dwctx->i2s_dwapb_rer0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX0_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_ter0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX0_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_rcr0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX0_CFG_WLEN);
+	i2s_dev->reg_dwctx->i2s_dwapb_tcr0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX0_CFG_WLEN);
+
+	i2s_dev->reg_dwctx->i2s_dwapb_rfcr0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX0_CFG_FIFO_LEVEL);
+	i2s_dev->reg_dwctx->i2s_dwapb_tfcr0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX0_CFG_FIFO_LEVEL);
+	i2s_dev->reg_dwctx->i2s_dwapb_rff0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX0_FIFO_FLUSH);
+	i2s_dev->reg_dwctx->i2s_dwapb_tff0 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX0_FIFO_FLUSH);
+
+	i2s_dev->reg_dwctx->i2s_dwapb_rer1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX1_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_ter1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX1_EN);
+	i2s_dev->reg_dwctx->i2s_dwapb_rcr1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX1_CFG_WLEN);
+	i2s_dev->reg_dwctx->i2s_dwapb_tcr1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX1_CFG_WLEN);
+
+	i2s_dev->reg_dwctx->i2s_dwapb_rfcr1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX1_CFG_FIFO_LEVEL);
+	i2s_dev->reg_dwctx->i2s_dwapb_tfcr1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX1_CFG_FIFO_LEVEL);
+	i2s_dev->reg_dwctx->i2s_dwapb_rff1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_RX1_FIFO_FLUSH);
+	i2s_dev->reg_dwctx->i2s_dwapb_tff1 = i2s_read_reg(i2s_dev->i2s_base, DWI2S_TX1_FIFO_FLUSH);
+
+	i2s_dev->reg_dwctx->i2s_dwapb_dmacr = i2s_read_reg(i2s_dev->i2s_base, DWI2S_DMA_CONTROL);
+
+	if (i2s_dev->capability & CVI_I2S_MASTER)
+		clk_disable(i2s_dev->clk);
+
+	return 0;
+}
+
+static int cvi_dwi2s_pm_resume(struct device *dev)
+{
+	struct cvi_i2s_dev *i2s_dev = dev_get_drvdata(dev);
+
+	if (i2s_dev->capability & CVI_I2S_MASTER)
+		clk_enable(i2s_dev->clk);
+
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_EN, i2s_dev->reg_dwctx->i2s_dwapb_ier);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX_BLOCK_EN, i2s_dev->reg_dwctx->i2s_dwapb_irer);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX_BLOCK_EN, i2s_dev->reg_dwctx->i2s_dwapb_iter);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_CLK_EN, i2s_dev->reg_dwctx->i2s_dwapb_cer);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_CLK_CFG, i2s_dev->reg_dwctx->i2s_dwapb_ccr);
+
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX0_EN, i2s_dev->reg_dwctx->i2s_dwapb_rer0);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX0_EN, i2s_dev->reg_dwctx->i2s_dwapb_ter0);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX0_CFG_WLEN, i2s_dev->reg_dwctx->i2s_dwapb_rcr0);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX0_CFG_WLEN, i2s_dev->reg_dwctx->i2s_dwapb_tcr0);
+
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX0_CFG_FIFO_LEVEL, i2s_dev->reg_dwctx->i2s_dwapb_rfcr0);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX0_CFG_FIFO_LEVEL, i2s_dev->reg_dwctx->i2s_dwapb_tfcr0);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX0_FIFO_FLUSH, i2s_dev->reg_dwctx->i2s_dwapb_rff0);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX0_FIFO_FLUSH, i2s_dev->reg_dwctx->i2s_dwapb_tff0);
+
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX1_EN, i2s_dev->reg_dwctx->i2s_dwapb_rer1);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX1_EN, i2s_dev->reg_dwctx->i2s_dwapb_ter1);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX1_CFG_WLEN, i2s_dev->reg_dwctx->i2s_dwapb_rcr1);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX1_CFG_WLEN, i2s_dev->reg_dwctx->i2s_dwapb_tcr1);
+
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX1_CFG_FIFO_LEVEL, i2s_dev->reg_dwctx->i2s_dwapb_rfcr1);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX1_CFG_FIFO_LEVEL, i2s_dev->reg_dwctx->i2s_dwapb_tfcr1);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_RX1_FIFO_FLUSH, i2s_dev->reg_dwctx->i2s_dwapb_rff1);
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_TX1_FIFO_FLUSH, i2s_dev->reg_dwctx->i2s_dwapb_tff1);
+
+	i2s_write_reg(i2s_dev->i2s_base, DWI2S_DMA_CONTROL, i2s_dev->reg_dwctx->i2s_dwapb_dmacr);
+
+	return 0;
+}
+
+#else
+#define cvi_dwi2s_pm_suspend	NULL
+#define cvi_dwi2s_pm_resume	NULL
+#endif
+
+#ifdef CONFIG_PM
+static const struct dev_pm_ops cvi_pm_ops = {
+	SET_RUNTIME_PM_OPS(cvi_dwi2s_runtime_suspend, cvi_dwi2s_runtime_resume, NULL)
+#ifdef CONFIG_PM_SLEEP
+	SET_SYSTEM_SLEEP_PM_OPS(cvi_dwi2s_pm_suspend, cvi_dwi2s_pm_resume)
+#endif
+};
+#endif
 
 static struct platform_driver cvi_dw_i2s_driver = {
 	.probe		= cvi_dw_i2s_probe,
@@ -1016,11 +1079,7 @@ static struct platform_driver cvi_dw_i2s_driver = {
 #endif
 	},
 };
-/*使用平台设备注册i2s驱动
-1.定义指定名称的平台设备驱动注册函数和平台设备驱动注销函数
-2.在函数体内分别通过platform_driver_register()函数和
-    platform_driver_unregister()函数注册和注销该平台设备驱动
-*/
+
 module_platform_driver(cvi_dw_i2s_driver);
 
 MODULE_AUTHOR("rachel <ethan.chen@wisecore.com.tw>");

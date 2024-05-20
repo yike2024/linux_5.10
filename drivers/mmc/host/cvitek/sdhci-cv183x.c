@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/mmc/host/sdhci-cv.c - CVITEK SDHCI Platform driver
  *
@@ -64,7 +65,8 @@
 static struct proc_dir_entry *proc_cvi_dir;
 
 static char *card_type[MAX_CARD_TYPE + 1] = {
-	"MMC card", "SD card", "SDIO card", "SD combo (IO+mem) card", "unknown"
+	"MMC card", "SD card", "SDIO card",
+	"SD combo (IO+mem) card", "unknown"
 };
 
 static char *cvi_get_card_type(unsigned int sd_type)
@@ -112,11 +114,10 @@ static void cvi_stats_seq_printout(struct seq_file *s)
 	mmc = cvi_host->mmc;
 	present = mmc->ops->get_cd(mmc);
 
-	if (present) {
+	if (present)
 		seq_puts(s, ": plugged");
-	} else {
+	else
 		seq_puts(s, ": unplugged");
-	}
 
 	card = mmc->card;
 
@@ -182,9 +183,8 @@ static void *cvi_seq_start(struct seq_file *s, loff_t *pos)
 	 */
 	static unsigned long counter;
 
-	if (*pos == 0) {
+	if (*pos == 0)
 		return &counter;
-	}
 
 	*pos = 0;
 	return NULL;
@@ -489,13 +489,11 @@ retry_tuning:
 			goto retry_tuning;
 		}
 
-		if (ret) {
+		if (ret)
 			SET_MASK_BIT(tuning_result, min);
-		}
 
-		if (reg_rx_lead_lag) {
+		if (reg_rx_lead_lag)
 			SET_MASK_BIT(rx_lead_lag_result, min);
-		}
 
 		min++;
 	}
@@ -525,9 +523,9 @@ retry_tuning:
 	// Find a final tap as median of maximum window
 	for (k = 0; k < TUNE_MAX_PHCODE; k++) {
 		if (CHECK_MASK_BIT(tuning_result, k) == 0) {
-			if (-1 == cur_window_idx) {
+			if (-1 == cur_window_idx)
 				cur_window_idx = k;
-			}
+
 			cur_window_size++;
 
 			if (cur_window_size > max_window_size) {
@@ -552,9 +550,9 @@ retry_tuning:
 				max_lead_lag_size = cur_window_size;
 				break;
 			}
-			if (cur_window_idx == -1) {
+			if (cur_window_idx == -1)
 				cur_window_idx = k;
-			}
+
 			cur_window_size++;
 			rx_lead_lag_phase = 0;
 		} else {
@@ -1210,7 +1208,7 @@ static int get_emmc_clk_control(struct sdhci_cvi_host *cvi_host)
 	int ret;
 	struct mmc_host *mmc = cvi_host->mmc;
 
-	pr_debug("%s: get_emmc_clk_control\n", mmc_hostname(mmc));
+	pr_debug("%s: %s\n", mmc_hostname(mmc), __func__);
 
 	cvi_host->clk_rst_axi_emmc_ctrl = devm_reset_control_get(&cvi_host->pdev->dev, "axi_emmc");
 	if (IS_ERR(cvi_host->clk_rst_axi_emmc_ctrl)) {
@@ -1323,9 +1321,8 @@ static int sdhci_cvi_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (pdev->dev.of_node) {
+	if (pdev->dev.of_node)
 		gpio_cd = of_get_named_gpio(pdev->dev.of_node, "cvi-cd-gpios", 0);
-	}
 
 	if (gpio_is_valid(gpio_cd)) {
 		cvi_host->cvi_gpio = devm_kzalloc(&cvi_host->pdev->dev,

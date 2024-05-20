@@ -236,7 +236,4 @@ source "drivers/counter/Kconfig"
 
 source "drivers/most/Kconfig"
 
-source "drivers/efuse/Kconfig"
-
-source "drivers/otp/Kconfig"
 endmenu

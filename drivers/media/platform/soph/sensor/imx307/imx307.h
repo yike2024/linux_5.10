@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _SENSOR_REG_H_
 #define _SENSOR_REG_H_
 
@@ -21,7 +22,7 @@ static s64 imx307_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		0,                      //7:mipi_dev
-		1,                      //8:dphy.enable
+		0,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		6,                      //10:cif phy mode
 		2,                      //LANE_0
@@ -44,7 +45,7 @@ static s64 imx307_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		1,                      //7:mipi_dev
-		1,                      //8:dphy.enable
+		0,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		6,                      //10:cif phy mode
 		4,                      //LANE_0
@@ -67,7 +68,7 @@ static s64 imx307_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		2,                      //7:mipi_dev
-		1,                      //8:dphy.enable
+		0,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		6,                      //10:cif phy mode
 		7,                      //LANE_0
@@ -90,7 +91,7 @@ static s64 imx307_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		3,                      //7:mipi_dev
-		1,                      //8:dphy.enable
+		0,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		6,                      //10:cif phy mode
 		10,                      //LANE_0
@@ -113,7 +114,7 @@ static s64 imx307_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		4,                      //7:mipi_dev
-		1,                      //8:dphy.enable
+		0,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		6,                      //10:cif phy mode
 		14,                      //LANE_0
@@ -136,7 +137,7 @@ static s64 imx307_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		5,                      //7:mipi_dev
-		1,                      //8:dphy.enable
+		0,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		6,                      //10:cif phy mode
 		16,                      //LANE_0

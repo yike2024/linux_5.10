@@ -135,7 +135,7 @@ static int _init_resource(struct platform_device *pdev)
 	for (i = 0; i < (MAX_LINK_NUM * 2 - 1); ++i) {
 		res = platform_get_resource(pdev, IORESOURCE_MEM, i);
 		if (!res) {
-			dev_info(&pdev->dev, "get memsource [%d] failed\n", i);
+			dev_info(&pdev->dev, "no memsource[%d], break\n", i);
 			break;
 		}
 #if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)

@@ -459,7 +459,7 @@ static struct cv186x_hw_clock cv186x_clks[] = {
 	CV186X_CLK(CV186X_AP_CLK_SECURITY, "clk_security",
 			((const char *[]) { "osc"}),
 			REG_CLK_EN_0, 10,
-			0xff, 0, 0xff, 0, 0, -1, 0, -1, 0xff, 0),
+			0xff, 0, 0xff, 0, 0, -1, 0, -1, 0xff, CLK_IS_CRITICAL),
 	CV186X_CLK(CV186X_AP_CLK_HSPERI_FAB, "ap_clk_hsperi_fab",
 			((const char *[]) { "osc", "clk_axi4"}),
 			REG_CLK_EN_0, 11,
@@ -1578,7 +1578,7 @@ static struct cv186x_hw_clock cv186x_clks[] = {
 			REG_CLK_EN_9, 13, 0xff, 0, 0xff, 0, 0, -1, 0, -1, 0xff, 0),
 	CV186X_CLK(CV186X_CLK_APB_OTP_C, "clk_apb_otp_c",
 			((const char *[]) { "clk_security"}),
-			REG_CLK_EN_9, 14, 0xff, 0, 0xff, 0, 0, -1, 0, -1, 0xff, 0),
+			REG_CLK_EN_9, 14, 0xff, 0, 0xff, 0, 0, -1, 0, -1, 0xff, CLK_IS_CRITICAL),
 	CV186X_CLK(CV186X_CLK_APB_GPIO, "clk_apb_gpio",
 			((const char *[]) { "clk_fab1"}),
 			REG_CLK_EN_9, 15, 0xff, 0, 0xff, 0, 0, -1, 0, -1, 0xff, 0),
@@ -2195,7 +2195,7 @@ static int cv186x_clk_div_set_rate(struct clk_hw *hw, unsigned long rate,
 
 	if (clk_hw->div[0].reg == 0xff) {
 		if (rate != parent_rate) {
-			pr_warn("w/o div: %d to %d\n", parent_rate, rate);
+			pr_warn("w/o div: %lu to %lu\n", parent_rate, rate);
 		}
 		return 0;
 	}

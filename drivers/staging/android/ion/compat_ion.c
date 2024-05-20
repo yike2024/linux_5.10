@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * drivers/staging/android/ion/compat_ion.c
- *
  * Copyright (C) 2013 Google, Inc.
  *
  * This software is licensed under the terms of the GNU General Public

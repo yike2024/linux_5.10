@@ -428,23 +428,6 @@ static void handle_thermal_trip(struct thermal_zone_device *tz, int trip)
 	if (tz->ops->get_trip_hyst)
 		tz->ops->get_trip_hyst(tz, trip, &hyst);
 
-#if 0
-	if (tz->last_temperature != THERMAL_TEMP_INVALID) {
-		if (tz->last_temperature < trip_temp &&
-		    tz->temperature >= trip_temp)
-			thermal_notify_tz_trip_up(tz->id, trip);
-		if (tz->last_temperature >= trip_temp &&
-			tz->temperature < (trip_temp - hyst)) {
-			thermal_notify_tz_trip_down(tz->id, trip);
-			} else if (tz->last_temperature >= (trip_temp + hyst) &&
-			(tz->temperature < trip_temp + hyst) && (trip == 0) && (tz->last_temperature != tz->temperature)) {
-				thermal_notify_tz_trip_down(tz->id, trip + 1);
-			} else if (tz->last_temperature >= (trip_temp - hyst) &&
-			(tz->temperature < trip_temp - hyst) && (trip == 0) && (tz->last_temperature != tz->temperature)) {
-				thermal_notify_tz_trip_down(tz->id, trip);
-			}
-	}
-#endif
 	if (tz->last_temperature != THERMAL_TEMP_INVALID) {
 		if (tz->last_temperature < trip_temp &&
 		    tz->temperature >= trip_temp) {
@@ -586,10 +569,10 @@ void thermal_zone_device_update(struct thermal_zone_device *tz,
 
 	tz->notify_event = event;
 
-    for (count = 0; count < tz->trips; count++) {
+	for (count = 0; count < tz->trips; count++) {
 		handle_thermal_trip(tz, count);
 		handle_thermal_trip(tz, tz->trips - count - 1);
-    }
+	}
 }
 EXPORT_SYMBOL_GPL(thermal_zone_device_update);
 

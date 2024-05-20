@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/mmc/host/sdhci-cv.c - CVITEK SDHCI Platform driver
  *
@@ -72,7 +73,8 @@
 static struct proc_dir_entry *proc_cvi_dir;
 
 static char *card_type[MAX_CARD_TYPE + 1] = {
-	"MMC card", "SD card", "SD1 card", "SDIO card", "SD combo (IO+mem) card" };
+	"MMC card", "SD card", "SD1 card", "SDIO card",
+	"SD combo (IO+mem) card" };
 
 static char *cvi_get_card_type(unsigned int sd_type)
 {
@@ -119,11 +121,10 @@ static void cvi_stats_seq_printout(struct seq_file *s)
 	mmc = cvi_host->mmc;
 	present = mmc->ops->get_cd(mmc);
 
-	if (present) {
+	if (present)
 		seq_puts(s, ": plugged");
-	} else {
+	else
 		seq_puts(s, ": unplugged");
-	}
 
 	card = mmc->card;
 
@@ -188,9 +189,8 @@ static void *cvi_seq_start(struct seq_file *s, loff_t *pos)
 	 */
 	static unsigned long counter;
 
-	if (*pos == 0) {
+	if (*pos == 0)
 		return &counter;
-	}
 
 	*pos = 0;
 	return NULL;
@@ -276,6 +276,7 @@ static void sdhci_cv186x_sd_setup_pad(struct sdhci_host *host)
 	/* 4 for gpio, 0 for cd pinmux */
 	uint32_t val = 0;
 	uint32_t reg = 0;
+
 	sd0_pin_mux_base = ioremap(SD0_CD_PIN, 4);
 	if (!sd0_pin_mux_base) {
 		pr_info("[%s %d]===> ioremap failed!\n", __func__, __LINE__);
@@ -303,6 +304,7 @@ static void sdhci_cv186x_sd1_setup_pad(struct sdhci_host *host)
 	/* 3 for gpio, 0 for cd pinmux */
 	uint32_t val = 0;
 	uint32_t reg = 0;
+
 	sd1_pin_mux_base = ioremap(SD1_CD_PIN, 4);
 	if (!sd1_pin_mux_base) {
 		pr_info("[%s %d]===> ioremap failed!\n", __func__, __LINE__);
@@ -576,13 +578,11 @@ retry_tuning:
 			goto retry_tuning;
 		}
 
-		if (ret) {
+		if (ret)
 			SET_MASK_BIT(tuning_result, min);
-		}
 
-		if (reg_rx_lead_lag) {
+		if (reg_rx_lead_lag)
 			SET_MASK_BIT(rx_lead_lag_result, min);
-		}
 
 		min++;
 	}
@@ -612,9 +612,9 @@ retry_tuning:
 	// Find a final tap as median of maximum window
 	for (k = 0; k < TUNE_MAX_PHCODE; k++) {
 		if (CHECK_MASK_BIT(tuning_result, k) == 0) {
-			if (-1 == cur_window_idx) {
+			if (-1 == cur_window_idx)
 				cur_window_idx = k;
-			}
+
 			cur_window_size++;
 
 			if (cur_window_size > max_window_size) {
@@ -639,9 +639,9 @@ retry_tuning:
 				max_lead_lag_size = cur_window_size;
 				break;
 			}
-			if (cur_window_idx == -1) {
+			if (cur_window_idx == -1)
 				cur_window_idx = k;
-			}
+
 			cur_window_size++;
 			rx_lead_lag_phase = 0;
 		} else {
@@ -1204,9 +1204,8 @@ static int sdhci_cvi_probe(struct platform_device *pdev)
 		}
 	}
 
-	if (pdev->dev.of_node) {
+	if (pdev->dev.of_node)
 		gpio_num = of_get_named_gpio(pdev->dev.of_node, "cvi-cd-gpios", 0);
-	}
 
 	if (gpio_is_valid(gpio_num)) {
 		cvi_host->cvi_gpio = devm_kzalloc(&cvi_host->pdev->dev,
@@ -1236,15 +1235,12 @@ static int sdhci_cvi_probe(struct platform_device *pdev)
 			cvi_host->pwr_gpio = gpio_num;
 			pr_info("get pwr gpio number:%d\n", gpio_num);
 			ret = gpio_request_one(gpio_num, GPIOF_OUT_INIT_LOW, "pwr_gpio");
-			if (ret) {
-				printk(KERN_ERR "Failed to request GPIO: %d\n", ret);
+			if (ret)
 				goto io_free;
-			}
 		}
 	}
-	/*
-     * extra adma table cnt for cross 128M boundary handling.
-	 */
+
+	// extra adma table cnt for cross 128M boundary handling.
 	extra = DIV_ROUND_UP_ULL(dma_get_required_mask(&pdev->dev), SZ_128M);
 	if (extra > SDHCI_MAX_SEGS)
 		extra = SDHCI_MAX_SEGS;

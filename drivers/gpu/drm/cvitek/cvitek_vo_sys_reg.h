@@ -1,6 +1,7 @@
 #ifndef __CVITEK_DISP_REG_H__
 #define __CVITEK_DISP_REG_H__
 #include <linux/io.h>
+#include <linux/delay.h>
 #include <linux/spinlock.h>
 
 /*
@@ -395,7 +396,7 @@ extern void __iomem  *top_pll_base;
 enum drm_intf {
     DRM_INTF_DISP0,
     DRM_INTF_DISP1,
-	DRM_INTF_HDMI,
+    DRM_INTF_HDMI,
     DRM_INTF_BUTT,
 };
 
@@ -403,5 +404,6 @@ u32 _reg_read(void __iomem *addr);
 void _reg_write(void __iomem *addr, u32 value);
 void _reg_write_mask(void __iomem *addr, u32 mask, u32 data);
 void extend_axi_to_36bit(u32 high_bit, enum drm_intf intf);
+void reset_disp(void);
 
 #endif

@@ -30,24 +30,27 @@
 #include <linux/watchdog.h>
 #include <linux/debugfs.h>
 
-#define WDOG_CONTROL_REG_OFFSET		    0x00
-#define WDOG_CONTROL_REG_WDT_EN_MASK	    0x01
-#define WDOG_CONTROL_REG_RESP_MODE_MASK	    0x02
-#define WDOG_TIMEOUT_RANGE_REG_OFFSET	    0x04
-#define WDOG_TIMEOUT_RANGE_TOPINIT_SHIFT    4
-#define WDOG_CURRENT_COUNT_REG_OFFSET	    0x08
-#define WDOG_COUNTER_RESTART_REG_OFFSET     0x0c
-#define WDOG_COUNTER_RESTART_KICK_VALUE	    0x76
-#define WDOG_INTERRUPT_STATUS_REG_OFFSET    0x10
-#define WDOG_INTERRUPT_CLEAR_REG_OFFSET     0x14
-#define WDOG_COMP_PARAMS_5_REG_OFFSET       0xe4
-#define WDOG_COMP_PARAMS_4_REG_OFFSET       0xe8
-#define WDOG_COMP_PARAMS_3_REG_OFFSET       0xec
-#define WDOG_COMP_PARAMS_2_REG_OFFSET       0xf0
-#define WDOG_COMP_PARAMS_1_REG_OFFSET       0xf4
-#define WDOG_COMP_PARAMS_1_USE_FIX_TOP      BIT(6)
-#define WDOG_COMP_VERSION_REG_OFFSET        0xf8
-#define WDOG_COMP_TYPE_REG_OFFSET           0xfc
+#define WDOG_CONTROL_REG_OFFSET			0x00
+#define WDOG_CONTROL_REG_WDT_EN_MASK		0x01
+#define WDOG_CONTROL_REG_RESP_MODE_MASK		0x02
+#define WDOG_CONTROL_REG_TOR_MODE_MASK		0x40
+#define WDOG_CONTROL_REG_ITOR_MODE_MASK		0x80
+#define WDOG_TIMEOUT_RANGE_REG_OFFSET		0x04
+#define WDOG_TIMEOUT_RANGE_TOPINIT_SHIFT	4
+#define WDOG_CURRENT_COUNT_REG_OFFSET		0x08
+#define WDOG_COUNTER_RESTART_REG_OFFSET		0x0c
+#define WDOG_COUNTER_RESTART_KICK_VALUE		0x76
+#define WDOG_INTERRUPT_STATUS_REG_OFFSET	0x10
+#define WDOG_INTERRUPT_CLEAR_REG_OFFSET		0x14
+#define WDOG_TIMEOUT_COUNTER_OFFSET		0x1C
+#define WDOG_COMP_PARAMS_5_REG_OFFSET		0xe4
+#define WDOG_COMP_PARAMS_4_REG_OFFSET		0xe8
+#define WDOG_COMP_PARAMS_3_REG_OFFSET		0xec
+#define WDOG_COMP_PARAMS_2_REG_OFFSET		0xf0
+#define WDOG_COMP_PARAMS_1_REG_OFFSET		0xf4
+#define WDOG_COMP_PARAMS_1_USE_FIX_TOP		BIT(6)
+#define WDOG_COMP_VERSION_REG_OFFSET		0xf8
+#define WDOG_COMP_TYPE_REG_OFFSET		0xfc
 
 /* There are sixteen TOPs (timeout periods) that can be set in the watchdog. */
 #define DW_WDT_NUM_TOPS		16
@@ -66,8 +69,7 @@ static const u32 dw_wdt_fix_tops[DW_WDT_NUM_TOPS] = {
 
 static bool nowayout = WATCHDOG_NOWAYOUT;
 module_param(nowayout, bool, 0);
-MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started "
-		 "(default=" __MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
+MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started (default=" __MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
 
 enum dw_wdt_rmod {
 	DW_WDT_RMOD_RESET = 1,
@@ -171,19 +173,12 @@ static unsigned int dw_wdt_get_max_timeout_ms(struct dw_wdt *dw_wdt)
 
 static unsigned int dw_wdt_get_timeout(struct dw_wdt *dw_wdt)
 {
-	int top_val = readl(dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET) & 0xF;
-	int idx;
+	unsigned int toc, torr;
 
-	for (idx = 0; idx < DW_WDT_NUM_TOPS; ++idx) {
-		if (dw_wdt->timeouts[idx].top_val == top_val)
-			break;
-	}
+	torr = readl(dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET) & 0xF;
+	toc = readl(dw_wdt->regs + WDOG_TIMEOUT_COUNTER_OFFSET) & 0xFFFF;
 
-	/*
-	 * In IRQ mode due to the two stages counter, the actual timeout is
-	 * twice greater than the TOP setting.
-	 */
-	return dw_wdt->timeouts[idx].sec * dw_wdt->rmod;
+	return (toc << (torr + 1)) / dw_wdt->rate;
 }
 
 static cpumask_t cpus_alive = CPU_MASK_NONE;
@@ -193,7 +188,7 @@ static void cpu_alive(void *passed_regs)
 {
 	int cpu = smp_processor_id();
 
-	pr_debug("cpu[%d] setmask \n", cpu);
+	pr_debug("cpu[%d] setmask\n", cpu);
 	cpumask_set_cpu(cpu, &cpus_alive);
 }
 #endif
@@ -217,6 +212,7 @@ static int dw_wdt_ping(struct watchdog_device *wdd)
 		isFirst = 0;
 		cpus_alive = CPU_MASK_NONE;
 		smp_call_function(cpu_alive, NULL, 0);
+		// memory barrier
 		smp_wmb();
 	}
 #endif
@@ -224,11 +220,32 @@ static int dw_wdt_ping(struct watchdog_device *wdd)
 	return 0;
 }
 
+static inline int dw_wdt_top_in_ms(unsigned int clk_khz, unsigned int top)
+{
+	/*
+	 * There are 16 possible timeout values in 0..15 where the number of
+	 * cycles is 2 ^ (16 + i) and the watchdog counts down.
+	 */
+	return (1U << (16 + top)) / clk_khz;
+}
+
+static inline int dw_wdt_top_xlate_toc(unsigned int clk_khz, unsigned int top, unsigned int top_val)
+{
+	// T = WDT_TOC <<( WDT_TORR +1) when TOR_MODE = 1
+	return ((top * clk_khz) >> (top_val + 1)) + 1;// approximate value
+}
+
 static int dw_wdt_set_timeout(struct watchdog_device *wdd, unsigned int top_s)
 {
 	struct dw_wdt *dw_wdt = to_dw_wdt(wdd);
-	unsigned int timeout;
-	u32 top_val;
+	//unsigned int timeout;
+	u32 top_val = DW_WDT_NUM_TOPS;
+	int i;
+	u32 toc;
+
+	// BugFix: Athena2 wdt will reset SOC directly if set timeout after start
+	if (watchdog_active(wdd))
+		return -EOPNOTSUPP;
 
 	/*
 	 * Note IRQ mode being enabled means having a non-zero pre-timeout
@@ -238,21 +255,31 @@ static int dw_wdt_set_timeout(struct watchdog_device *wdd, unsigned int top_s)
 	 * second timeout performs the system reset. So basically the effective
 	 * watchdog-caused reset happens after two watchdog TOPs elapsed.
 	 */
-	timeout = dw_wdt_find_best_top(dw_wdt, DIV_ROUND_UP(top_s, dw_wdt->rmod),
-				       &top_val);
+	//timeout = dw_wdt_find_best_top(dw_wdt, DIV_ROUND_UP(top_s, dw_wdt->rmod),
+	//			       &top_val);
+
+	for (i = 0; i <= DW_WDT_NUM_TOPS; ++i)
+		if (dw_wdt_top_in_ms((dw_wdt->rate / 1000), i) >= (top_s * 1000)) {
+			top_val = i - 1;
+			break;
+		}
+
+	toc = dw_wdt_top_xlate_toc((dw_wdt->rate / 1000), (top_s * 1000), top_val);
+
 	if (dw_wdt->rmod == DW_WDT_RMOD_IRQ)
-		wdd->pretimeout = timeout;
+		wdd->pretimeout = top_val;
 	else
 		wdd->pretimeout = 0;
 
 	/*
 	 * Set the new value in the watchdog.  Some versions of dw_wdt
-	 * have have TOPINIT in the TIMEOUT_RANGE register (as per
+	 * have TOPINIT in the TIMEOUT_RANGE register (as per
 	 * CP_WDT_DUAL_TOP in WDT_COMP_PARAMS_1).  On those we
 	 * effectively get a pat of the watchdog right here.
 	 */
 	writel(top_val | top_val << WDOG_TIMEOUT_RANGE_TOPINIT_SHIFT,
 	       dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET);
+	writel(toc, dw_wdt->regs + WDOG_TIMEOUT_COUNTER_OFFSET);
 
 	/* Kick new TOP value into the watchdog counter if activated. */
 	if (watchdog_active(wdd))
@@ -264,7 +291,7 @@ static int dw_wdt_set_timeout(struct watchdog_device *wdd, unsigned int top_s)
 	 * wdd->max_hw_heartbeat_ms
 	 */
 	if (top_s * 1000 <= wdd->max_hw_heartbeat_ms)
-		wdd->timeout = timeout * dw_wdt->rmod;
+		wdd->timeout = top_s * dw_wdt->rmod;
 	else
 		wdd->timeout = top_s;
 
@@ -297,6 +324,8 @@ static void dw_wdt_arm_system_reset(struct dw_wdt *dw_wdt)
 		val &= ~WDOG_CONTROL_REG_RESP_MODE_MASK;
 	/* Enable watchdog. */
 	val |= WDOG_CONTROL_REG_WDT_EN_MASK;
+	val |= WDOG_CONTROL_REG_TOR_MODE_MASK;
+	val |= WDOG_CONTROL_REG_ITOR_MODE_MASK;
 	writel(val, dw_wdt->regs + WDOG_CONTROL_REG_OFFSET);
 }
 
@@ -309,6 +338,11 @@ static int dw_wdt_start(struct watchdog_device *wdd)
 	dw_wdt_arm_system_reset(dw_wdt);
 
 	return 0;
+}
+
+static unsigned int dw_wdt_status(struct watchdog_device *wdd)
+{
+	return wdd->status;
 }
 
 static int dw_wdt_stop(struct watchdog_device *wdd)
@@ -378,6 +412,7 @@ static const struct watchdog_info dw_wdt_pt_ident = {
 static const struct watchdog_ops dw_wdt_ops = {
 	.owner		= THIS_MODULE,
 	.start		= dw_wdt_start,
+	.status         = dw_wdt_status,
 	.stop		= dw_wdt_stop,
 	.ping		= dw_wdt_ping,
 	.set_timeout	= dw_wdt_set_timeout,
@@ -409,8 +444,9 @@ static int dw_wdt_suspend(struct device *dev)
 {
 	struct dw_wdt *dw_wdt = dev_get_drvdata(dev);
 
-	dw_wdt->control = readl(dw_wdt->regs + WDOG_CONTROL_REG_OFFSET);
-	dw_wdt->timeout = readl(dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET);
+	// A2 unneed
+	//dw_wdt->control = readl(dw_wdt->regs + WDOG_CONTROL_REG_OFFSET);
+	//dw_wdt->timeout = readl(dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET);
 
 	clk_disable_unprepare(dw_wdt->pclk);
 	clk_disable_unprepare(dw_wdt->clk);
@@ -432,8 +468,9 @@ static int dw_wdt_resume(struct device *dev)
 		return err;
 	}
 
-	writel(dw_wdt->timeout, dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET);
-	writel(dw_wdt->control, dw_wdt->regs + WDOG_CONTROL_REG_OFFSET);
+	// A2 unneed
+	//writel(dw_wdt->timeout, dw_wdt->regs + WDOG_TIMEOUT_RANGE_REG_OFFSET);
+	//writel(dw_wdt->control, dw_wdt->regs + WDOG_CONTROL_REG_OFFSET);
 
 	dw_wdt_ping(&dw_wdt->wdd);
 
@@ -537,13 +574,7 @@ static const struct debugfs_reg32 dw_wdt_dbgfs_regs[] = {
 	DW_WDT_DBGFS_REG("ccvr", WDOG_CURRENT_COUNT_REG_OFFSET),
 	DW_WDT_DBGFS_REG("crr", WDOG_COUNTER_RESTART_REG_OFFSET),
 	DW_WDT_DBGFS_REG("stat", WDOG_INTERRUPT_STATUS_REG_OFFSET),
-	DW_WDT_DBGFS_REG("param5", WDOG_COMP_PARAMS_5_REG_OFFSET),
-	DW_WDT_DBGFS_REG("param4", WDOG_COMP_PARAMS_4_REG_OFFSET),
-	DW_WDT_DBGFS_REG("param3", WDOG_COMP_PARAMS_3_REG_OFFSET),
-	DW_WDT_DBGFS_REG("param2", WDOG_COMP_PARAMS_2_REG_OFFSET),
-	DW_WDT_DBGFS_REG("param1", WDOG_COMP_PARAMS_1_REG_OFFSET),
-	DW_WDT_DBGFS_REG("version", WDOG_COMP_VERSION_REG_OFFSET),
-	DW_WDT_DBGFS_REG("type", WDOG_COMP_TYPE_REG_OFFSET)
+	DW_WDT_DBGFS_REG("toc", WDOG_TIMEOUT_COUNTER_OFFSET),
 };
 
 static void dw_wdt_dbgfs_init(struct dw_wdt *dw_wdt)
@@ -664,16 +695,17 @@ static int dw_wdt_drv_probe(struct platform_device *pdev)
 
 	reset_control_deassert(dw_wdt->rst);
 
-	ret = dw_wdt_init_timeouts(dw_wdt, dev);
-	if (ret)
-		goto out_disable_clk;
+	//ret = dw_wdt_init_timeouts(dw_wdt, dev);
+	//if (ret)
+	//	goto out_disable_clk;
 
 	wdd = &dw_wdt->wdd;
 	wdd->ops = &dw_wdt_ops;
-	wdd->min_timeout = dw_wdt_get_min_timeout(dw_wdt);
-	wdd->max_hw_heartbeat_ms = dw_wdt_get_max_timeout_ms(dw_wdt);
+	wdd->min_timeout = 1;//dw_wdt_get_min_timeout(dw_wdt);
+	wdd->max_hw_heartbeat_ms = 100000;//dw_wdt_get_max_timeout_ms(dw_wdt);
 	wdd->parent = dev;
 
+	watchdog_stop_on_reboot(wdd);
 	watchdog_set_drvdata(wdd, dw_wdt);
 	watchdog_set_nowayout(wdd, nowayout);
 	watchdog_init_timeout(wdd, 0, dev);

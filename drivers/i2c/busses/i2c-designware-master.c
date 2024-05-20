@@ -373,8 +373,8 @@ i2c_dw_xfer_msg(struct dw_i2c_dev *dev)
 			/* more bytes to be written */
 			dev->status |= STATUS_WRITE_IN_PROGRESS;
 			break;
-		} else
-			dev->status &= ~STATUS_WRITE_IN_PROGRESS;
+		}
+		dev->status &= ~STATUS_WRITE_IN_PROGRESS;
 	}
 
 	/*
@@ -449,8 +449,8 @@ i2c_dw_read(struct dw_i2c_dev *dev)
 			dev->rx_buf_len = len;
 			dev->rx_buf = buf;
 			return;
-		} else
-			dev->status &= ~STATUS_READ_IN_PROGRESS;
+		}
+		dev->status &= ~STATUS_READ_IN_PROGRESS;
 	}
 }
 
@@ -782,11 +782,10 @@ int i2c_dw_probe_master(struct dw_i2c_dev *dev)
 	adap->dev.parent = dev->dev;
 	i2c_set_adapdata(adap, dev);
 
-	if (dev->flags & ACCESS_NO_IRQ_SUSPEND) {
+	if (dev->flags & ACCESS_NO_IRQ_SUSPEND)
 		irq_flags = IRQF_NO_SUSPEND;
-	} else {
+	else
 		irq_flags = IRQF_SHARED | IRQF_COND_SUSPEND;
-	}
 
 	i2c_dw_disable_int(dev);
 	ret = devm_request_irq(dev->dev, dev->irq, i2c_dw_isr, irq_flags,

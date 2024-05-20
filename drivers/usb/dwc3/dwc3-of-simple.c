@@ -39,7 +39,7 @@ struct dwc3_of_simple {
 	int vbus_gpio;
 };
 
-#define OTP_USB_XTAL_PHY_MASK 	0x3
+#define OTP_USB_XTAL_PHY_MASK	0x3
 
 #define REG_USB_SYS_REG_00		0x0
 #define REG_USB_EN				(1 << 0)
@@ -53,6 +53,9 @@ struct dwc3_of_simple {
 #define REG_PHY_SSC_REF_CLK_SEL_POS        14
 #define REG_PHY_SSC_REF_CLK_SEL_MSK        (0x1ffL << REG_PHY_SSC_REF_CLK_SEL_POS)
 #define REG_PHY_REF_SSP_EN					(1 << 24)
+
+#define REG_USB_SYS_REG_10			0x10
+#define REG_PHY_RX0LOSLEPSEM			BIT(23)
 
 #define REG_USB_SYS_REG_14					0x14
 #define REG_PHY_PHY_RESET					(1 << 5)
@@ -88,8 +91,7 @@ static int dwc3_of_simple_probe(struct platform_device *pdev)
 	simple->dev = dev;
 
 #if IS_ENABLED(CONFIG_ARCH_CVITEK)
-	if (of_device_is_compatible(np, "sophgo,cv186x-dwc3"))
-	{
+	if (of_device_is_compatible(np, "sophgo,cv186x-dwc3")) {
 		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 		simple->reg_usbsys = devm_ioremap_resource(&pdev->dev, res);
 		if (IS_ERR(simple->reg_usbsys))
@@ -103,7 +105,7 @@ static int dwc3_of_simple_probe(struct platform_device *pdev)
 		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_14) | (REG_PHY_PHY_RESET);
 		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_14);
 
-		msleep(1);
+		msleep(20);
 
 		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_14) & (~REG_PHY_PHY_RESET);
 		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_14);
@@ -114,28 +116,31 @@ static int dwc3_of_simple_probe(struct platform_device *pdev)
 		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_00) | (REG_USB_EN);
 		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_00);
 
+		value = readl(simple->reg_usbsys + REG_USB_SYS_REG_10) | REG_PHY_RX0LOSLEPSEM;
+		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_10);
+
 		otp_usb_xtal_phy = readl(simple->reg_usbsys + REG_USB_SYS_REG_0C) & OTP_USB_XTAL_PHY_MASK;
 
 		value &= readl(simple->reg_usbsys + REG_USB_SYS_REG_0C)
 				& ~(REG_PHY_REF_CLKDIV2) & ~(REG_PHY_FSEL_MSK)
 				& ~(REG_PHY_MPLL_MULTIPLIER_MSK) & ~(REG_PHY_SSC_REF_CLK_SEL_MSK);
-		switch(otp_usb_xtal_phy) {
-			case 0x0:    // xtal = 24 MHz
-					value |= (0x2A << REG_PHY_FSEL_POS);
-					los_mask = 240;
-					break;
-			case 0x1:    // xtal = 19.2 MHz
-					value |= (0x38 << REG_PHY_FSEL_POS);
-					los_mask = 192;
-					break;
-			case 0x2:    // xtal = 20 MHz
-					value |= (0x31 << REG_PHY_FSEL_POS);
-					los_mask = 200;
-					break;
-			case 0x3:    // xtal = 40 MHz
-					value |= REG_PHY_REF_CLKDIV2 | (0x31 << REG_PHY_FSEL_POS);
-					los_mask = 200;
-					break;
+		switch (otp_usb_xtal_phy) {
+		case 0x0:    // xtal = 24 MHz
+			value |= (0x2A << REG_PHY_FSEL_POS);
+			los_mask = 240;
+			break;
+		case 0x1:    // xtal = 19.2 MHz
+			value |= (0x38 << REG_PHY_FSEL_POS);
+			los_mask = 192;
+			break;
+		case 0x2:    // xtal = 20 MHz
+			value |= (0x31 << REG_PHY_FSEL_POS);
+			los_mask = 200;
+			break;
+		case 0x3:    // xtal = 40 MHz
+			value |= REG_PHY_REF_CLKDIV2 | (0x31 << REG_PHY_FSEL_POS);
+			los_mask = 200;
+			break;
 		}
 		writel(value, simple->reg_usbsys + REG_USB_SYS_REG_0C);
 

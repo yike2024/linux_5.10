@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _SENSOR_REG_H_
 #define _SENSOR_REG_H_
 
@@ -38,7 +39,7 @@ static s64 os04a10_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 	{//s1 linear mode
 		SNS_CFG_TYPE_MAX,
 		CAMPLL_FREQ_25M,        //1:mclk freq
-		1,    				    //2:mclk num
+		1,                      //2:mclk num
 		RX_MAC_CLK_400M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
 		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode

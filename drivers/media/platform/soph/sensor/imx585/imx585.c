@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
-// Copyright (c) 2017 Intel Corporation.
+/*
+ * imx585 driver
+ *
+ * Copyright (C) 2024 Sophon Co., Ltd.
+ *
+ */
 #include <linux/clk.h>
 #include <linux/acpi.h>
 #include <linux/i2c.h>
@@ -29,7 +34,11 @@
 /* Chip ID */
 #define IMX585_CHIP_ID_ADDR_H	0x5A1D
 #define IMX585_CHIP_ID_ADDR_L	0x5A1E
-#define IMX585_CHIP_ID			0x5902
+#define IMX585_CHIP_ID		0x5902
+
+/*Sensor type for isp middleware*/
+#define IMX585_SNS_TYPE_SDR V4L2_SONY_IMX585_MIPI_8M_30FPS_12BIT
+#define IMX585_SNS_TYPE_WDR V4L2_SONY_IMX585_MIPI_8M_25FPS_12BIT_WDR2TO1
 
 static const enum mipi_wdr_mode_e imx585_wdr_mode = CVI_MIPI_WDR_MODE_VC;
 
@@ -40,7 +49,6 @@ module_param_array(force_bus, int, &imx585_count, 0644);
 static int imx585_probe_index;
 static const unsigned short imx585_i2c_list[] = {0x1a};
 static const int imx585_bus_map[MAX_SENSOR_DEVICE] = {1, 2, -1, -1, -1, -1};
-static sns_sync_info_t g_sns_sync_info;
 
 struct imx585_reg_list {
 	u32 num_of_regs;
@@ -58,6 +66,7 @@ struct imx585_mode {
 	u32 exp_def;
 	u32 mipi_wdr_mode;
 	struct v4l2_fract max_fps;
+	sns_sync_info_t imx585_sync_info;
 	struct imx585_reg_list reg_list;
 	struct imx585_reg_list wdr_reg_list;
 };
@@ -193,10 +202,8 @@ static int imx585_write_regs(struct imx585 *imx585,
 		ret = imx585_write_reg(imx585, regs[i].address, 1,
 					regs[i].val);
 		if (ret) {
-			dev_err_ratelimited(
-				&client->dev,
-				"Failed to write reg 0x%4.4x. error = %d\n",
-				regs[i].address, ret);
+			dev_err_ratelimited(&client->dev, "Failed to write reg 0x%4.4x. error=%d\n",
+					    regs[i].address, ret);
 
 			return ret;
 		}
@@ -204,7 +211,6 @@ static int imx585_write_regs(struct imx585 *imx585,
 
 	return 0;
 }
-
 
 /* Open sub-device */
 static int imx585_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
@@ -238,22 +244,20 @@ static int imx585_set_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-
 static const struct v4l2_ctrl_ops imx585_ctrl_ops = {
 	.s_ctrl = imx585_set_ctrl,
 };
 
 static int g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
-				struct v4l2_mbus_config *config)
+			 struct v4l2_mbus_config *config)
 {
 	config->type = V4L2_MBUS_CSI2_DPHY;
 	return 0;
 }
 
-
 static int enum_mbus_code(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_mbus_code_enum *code)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_mbus_code_enum *code)
 {
 	/* Only one bayer order(GRBG) is supported */
 	if (code->index > 0)
@@ -265,8 +269,8 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int enum_frame_size(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_pad_config *cfg,
-				   struct v4l2_subdev_frame_size_enum *fse)
+			   struct v4l2_subdev_pad_config *cfg,
+			   struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct imx585 *imx585 = to_imx585(sd);
 
@@ -278,8 +282,7 @@ static int enum_frame_size(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static void update_pad_format(const struct imx585_mode *mode,
-				      struct v4l2_subdev_format *fmt)
+static void update_pad_format(const struct imx585_mode *mode, struct v4l2_subdev_format *fmt)
 {
 	fmt->format.width = mode->width;
 	fmt->format.height = mode->height;
@@ -288,19 +291,18 @@ static void update_pad_format(const struct imx585_mode *mode,
 }
 
 static int get_pad_format(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct imx585 *imx585 = to_imx585(sd);
 	struct v4l2_mbus_framefmt *framefmt;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&imx585->mutex);
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		framefmt = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 		fmt->format = *framefmt;
-		mutex_unlock(&imx585->mutex);
-		return -ENOTTY;
+		ret = -ENOTTY;
 	} else {
 		update_pad_format(imx585->cur_mode, fmt);
 	}
@@ -310,8 +312,8 @@ static int get_pad_format(struct v4l2_subdev *sd,
 }
 
 static int set_pad_format(struct v4l2_subdev *sd,
-		       struct v4l2_subdev_pad_config *cfg,
-		       struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct imx585 *imx585 = to_imx585(sd);
 	struct imx585_mode *mode;
@@ -342,16 +344,14 @@ static int set_pad_format(struct v4l2_subdev *sd,
 
 static void imx585_standby(struct imx585 *imx585)
 {
-	imx585_write_reg(imx585, 0x3000, REG_VALUE_08BIT, 0x01);/* STANDBY */
-	imx585_write_reg(imx585, 0x3002, REG_VALUE_08BIT, 0x01);/* XTMSTA */
-	printk("[imx585] standby\n");
+	imx585_write_reg(imx585, 0x3000, REG_VALUE_08BIT, 0x01);
+	imx585_write_reg(imx585, 0x3002, REG_VALUE_08BIT, 0x01);
 }
 
 static void imx585_restart(struct imx585 *imx585)
 {
-	imx585_write_reg(imx585, 0x3000, REG_VALUE_08BIT, 0x00);/* STANDBY */
-	imx585_write_reg(imx585, 0x3002, REG_VALUE_08BIT, 0x00);/* XTMSTA */
-	printk("[imx585] restart\n");
+	imx585_write_reg(imx585, 0x3000, REG_VALUE_08BIT, 0x00);
+	imx585_write_reg(imx585, 0x3002, REG_VALUE_08BIT, 0x00);
 }
 
 /* Start streaming */
@@ -359,13 +359,12 @@ static int start_streaming(struct imx585 *imx585)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&imx585->sd);
 	const struct imx585_reg_list *reg_list;
+	const sns_sync_info_t *sync_info;
 	int ret;
 
 	if (imx585->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-		printk("[imx585] linear setting\n");
 		reg_list = &imx585->cur_mode->reg_list;
 	} else {//wdr
-		printk("[imx585] wdr setting\n");
 		reg_list = &imx585->cur_mode->wdr_reg_list;
 	}
 
@@ -374,23 +373,25 @@ static int start_streaming(struct imx585 *imx585)
 		dev_err(&client->dev, "%s failed to set mode\n", __func__);
 		return ret;
 	}
-	if (g_sns_sync_info.num_of_regs > 0) {
-		ret = imx585_write_regs(imx585, (struct imx585_reg *)g_sns_sync_info.regs,
-				g_sns_sync_info.num_of_regs);
 
+	sync_info = &imx585->cur_mode->imx585_sync_info;
+
+	if (sync_info->num_of_regs > 0) {
+		ret = imx585_write_regs(imx585, (struct imx585_reg *)sync_info->regs,
+					sync_info->num_of_regs);
 		if (ret) {
 			dev_err(&client->dev, "%s failed to set default\n", __func__);
 			return ret;
 		}
 	}
 
-	usleep_range(100 * 1000, 120 * 2000);
+	usleep_range(100 * 1000, 200 * 1000);
 	/* Apply customized values from user */
 	ret =  __v4l2_ctrl_handler_setup(imx585->sd.ctrl_handler);
 	if (ret)
 		return ret;
 
-	printk("[imx585] init reg done\n");
+	dev_info(&client->dev, "wdr_mode(%d) reg setting done\n", imx585->cur_mode->mipi_wdr_mode);
 
 	return ret;
 }
@@ -407,8 +408,6 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	struct imx585 *imx585 = to_imx585(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0;
-
-	printk("[imx585] set stream(%d)\n", enable);
 
 	mutex_lock(&imx585->mutex);
 	if (imx585->streaming == enable) {
@@ -438,7 +437,7 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	imx585->streaming = enable;
 	mutex_unlock(&imx585->mutex);
 
-	printk("[imx585] set stream success\n");
+	dev_info(&client->dev, "set stream(%d) success\n", enable);
 
 	return ret;
 
@@ -486,9 +485,9 @@ error:
 /* Verify chip ID */
 static int imx585_identify_module(struct imx585 *imx585)
 {
-	// struct i2c_client *client = v4l2_get_subdevdata(&imx585->sd);
+	struct i2c_client *client = v4l2_get_subdevdata(&imx585->sd);
 	int ret;
-	int nVal, nVal2;
+	int val1, val2;
 	int read_data = 0;
 
 	imx585_write_reg(imx585, 0x3000, REG_VALUE_08BIT, 0x01);/* STANDBY */
@@ -497,17 +496,17 @@ static int imx585_identify_module(struct imx585 *imx585)
 	usleep_range(20 * 1000, 20 * 1000);
 
 	ret = imx585_read_reg(imx585, IMX585_CHIP_ID_ADDR_H,
-			       REG_VALUE_08BIT, &nVal);
+			       REG_VALUE_08BIT, &val1);
 
-	printk("[imx585] read id:0x%x, ret:%d", nVal, ret);
+	dev_info(&client->dev, "read id:0x%x, ret:%d", val1, ret);
 
 	if (ret)
 		return ret;
 
 	ret = imx585_read_reg(imx585, IMX585_CHIP_ID_ADDR_L,
-			       REG_VALUE_08BIT, &nVal2);
+			       REG_VALUE_08BIT, &val2);
 
-	read_data = ((nVal & 0xFF) << 8) | (nVal2 & 0xFF);
+	read_data = ((val1 & 0xFF) << 8) | (val2 & 0xFF);
 
 	// if (read_data != IMX585_CHIP_ID) {
 	// 	dev_err(&client->dev, "chip id(%x) mismatch, read(%x)\n",
@@ -522,7 +521,8 @@ static void imx585_mirror_flip(struct imx585 *imx585, int orient)
 {
 	int Filp = 0;
 	int Mirror = 0;
-	printk("[imx585] set mirror_flip:%d", orient);
+
+	pr_info("set mirror_flip:%d", orient);
 
 	switch (orient) {
 	case 0:
@@ -557,7 +557,7 @@ static int imx585_update_link_menu(struct imx585 *imx585)
 
 	imx585_link_cif_menu[id][wdr_index] = imx585->cur_mode->mipi_wdr_mode;
 
-	printk("[imx585] update mipi_mode:%lld", imx585_link_cif_menu[id][wdr_index]);
+	dev_info(&client->dev, "update mipi_mode:%lld", imx585_link_cif_menu[id][wdr_index]);
 
 	ctrl_hdlr = imx585->sd.ctrl_handler;
 	v4l2_ctrl_handler_free(ctrl_hdlr);
@@ -570,11 +570,9 @@ static int imx585_update_link_menu(struct imx585 *imx585)
 	}
 
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&imx585_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					imx585_link_cif_menu[id][i], 0,
-					(const s64 * )imx585_link_cif_menu[id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx585_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      imx585_link_cif_menu[id][i], 0,
+					       (const s64 *)imx585_link_cif_menu[id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -604,10 +602,11 @@ static long imx585_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_GET_TYPE:
 	{
 		int type = 0;
+
 		if (imx585->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-			type = V4L2_SONY_IMX585_MIPI_8M_30FPS_12BIT;
+			type = IMX585_SNS_TYPE_SDR;
 		} else {//wdr
-			type = V4L2_SONY_IMX585_MIPI_8M_25FPS_12BIT_WDR2TO1;
+			type = IMX585_SNS_TYPE_WDR;
 		}
 		memcpy(arg, &type, sizeof(int));
 		break;
@@ -616,6 +615,7 @@ static long imx585_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_MIRROR_FLIP:
 	{
 		int orient = 0;
+
 		memcpy(&orient, arg, sizeof(int));
 		imx585_mirror_flip(imx585, orient);
 		break;
@@ -625,6 +625,7 @@ static long imx585_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		struct i2c_client *client = v4l2_get_subdevdata(&imx585->sd);
 		sns_i2c_info_t i2c_info;
+
 		i2c_info.i2c_addr =  client->addr;
 		i2c_info.i2c_idx  =  client->adapter->i2c_idx;
 		memcpy(arg, &i2c_info, sizeof(sns_i2c_info_t));
@@ -634,26 +635,26 @@ static long imx585_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_HDR_ON:
 	{
 		int hdr_on = 0;
+
 		memcpy(&hdr_on, arg, sizeof(int));
 
-		if (hdr_on) {
+		if (hdr_on)
 			imx585->cur_mode->mipi_wdr_mode = imx585_wdr_mode;
-		} else {
+		else
 			imx585->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
-		}
+
 		imx585_update_link_menu(imx585);
 		break;
 	}
 
 	case SNS_V4L2_SET_SNS_SYNC_INFO:
 	{
-		memcpy(&g_sns_sync_info, arg, sizeof(sns_sync_info_t));
+		memcpy(&imx585->cur_mode->imx585_sync_info, arg, sizeof(sns_sync_info_t));
 		break;
 	}
 
 	default:
 		ret = -ENOIOCTLCMD;
-		printk("[imx585] unknown ioctl cmd:%d", cmd);
 		break;
 	}
 
@@ -666,7 +667,6 @@ static long imx585_compat_ioctl32(struct v4l2_subdev *sd,
 {
 	void __user *up = compat_ptr(arg);
 	long ret;
-	printk("[imx585] compat ioctl cmd:%d", cmd);
 
 	switch (cmd) {
 	default:
@@ -732,15 +732,12 @@ static int imx585_init_controls(struct imx585 *imx585, int index_id)
 	mutex_init(&imx585->mutex);
 	ctrl_hdlr->lock = &imx585->mutex;
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		if (SNS_CFG_TYPE_WDR_MODE == i) {
+		if (i == SNS_CFG_TYPE_WDR_MODE)
 			imx585->cur_mode->mipi_wdr_mode = imx585_link_cif_menu[index_id][i];
-		}
 
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&imx585_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					imx585_link_cif_menu[index_id][i], 0,
-					(const s64 * )imx585_link_cif_menu[index_id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx585_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      imx585_link_cif_menu[index_id][i], 0,
+					       (const s64 *)imx585_link_cif_menu[index_id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -790,35 +787,30 @@ static int imx585_probe(struct i2c_client *client,
 	int bus_id;
 	int ret = -1;
 	int i;
-	memset(&g_sns_sync_info, 0, sizeof(g_sns_sync_info));
 
-	printk("[imx585] probe id[%d] start\n", imx585_probe_index);
+	dev_info(dev, "probe id[%d] start\n", imx585_probe_index);
 
 	imx585_probe_index++;
 
 	if (index_id >= MAX_SENSOR_DEVICE || index_id < 0) {
-		printk("[imx585] invalid devid(%d)\n", index_id);
+		dev_info(dev, "invalid devid(%d)\n", index_id);
 		return ret;
 	}
 
 	imx585 = devm_kzalloc(&client->dev, sizeof(*imx585), GFP_KERNEL);
-	if (!imx585) {
-		dev_err(dev, "Failed to alloc devmem!\n");
+	if (!imx585)
 		return -ENOMEM;
-	}
 
 	sd = &imx585->sd;
 
 	for (i = 0; i < addr_num; i++) {
-		if (force_bus[index_id] < 0) {
+		if (force_bus[index_id] < 0)
 			bus_id = imx585_bus_map[index_id];
-		} else {
+		else
 			bus_id = force_bus[index_id];
-		}
 
-		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM) {
+		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM)
 			return ret;
-		}
 
 		client->addr = imx585_i2c_list[i];
 		client->adapter = i2c_get_adapter(bus_id);
@@ -828,16 +820,16 @@ static int imx585_probe(struct i2c_client *client,
 		/* Check module identity */
 		ret = imx585_identify_module(imx585);
 		if (ret) {
-			printk("id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
-				index_id, bus_id, i, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
+				 index_id, bus_id, i, client->addr);
 
-			if (i == addr_num - 1) {
+			if (i == addr_num - 1)
 				return ret;
-			}
-			continue;;
+
+			continue;
 		} else {
-			printk("id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
-				index_id, bus_id, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
+				 index_id, bus_id, client->addr);
 			break;
 		}
 	}
@@ -846,24 +838,21 @@ static int imx585_probe(struct i2c_client *client,
 
 	if (index_id >= ARRAY_SIZE(supported_modes)) {
 		imx585->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct imx585_mode), GFP_KERNEL);
-
-		memcpy(imx585->cur_mode, &supported_modes[0],
-					sizeof(struct imx585_mode));
+						 sizeof(struct imx585_mode), GFP_KERNEL);
+		memcpy(imx585->cur_mode, &supported_modes[0], sizeof(struct imx585_mode));
 	} else {
 		imx585->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct imx585_mode), GFP_KERNEL);
-
-		memcpy(imx585->cur_mode, &supported_modes[index_id],
-					sizeof(struct imx585_mode));
+						 sizeof(struct imx585_mode), GFP_KERNEL);
+		memcpy(imx585->cur_mode, &supported_modes[index_id], sizeof(struct imx585_mode));
 	}
+
+	memset(&imx585->cur_mode->imx585_sync_info, 0, sizeof(sns_sync_info_t));
 
 	mutex_init(&imx585->mutex);
 
 	ret = imx585_init_controls(imx585, index_id);
-	if (ret) {
+	if (ret)
 		return ret;
-	}
 
 	/* Initialize subdev */
 	sd->internal_ops = &imx585_internal_ops;
@@ -896,7 +885,7 @@ static int imx585_probe(struct i2c_client *client,
 	pm_runtime_enable(&client->dev);
 	pm_runtime_idle(&client->dev);
 
-	printk("[imx585] sensor_%d probe success\n", index_id);
+	dev_info(dev, "sensor_%d probe success\n", index_id);
 
 	return 0;
 
@@ -954,7 +943,8 @@ static struct i2c_driver imx585_i2c_driver = {
 
 static int __init sensor_mod_init(void)
 {
-	printk("== imx585 mod add ==\n");
+	pr_info("== imx585 mod add ==\n");
+
 	return i2c_add_driver(&imx585_i2c_driver);
 }
 

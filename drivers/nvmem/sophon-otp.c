@@ -11,25 +11,22 @@
 #include <linux/slab.h>
 #include <asm/cacheflush.h>
 #include <linux/arm-smccc.h>
-
 #include <linux/dma-map-ops.h>
 #include <linux/dma-direction.h>
+#include <linux/sophon-otp.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
 
-#include "secure_otp.h"
+#define SYSTEM_OTP2_BS          (0x0)
 
-#define ERROR(fmt, ...) pr_err(fmt, ##__VA_ARGS__)
-#define VERBOSE(fmt, ...) pr_debug(fmt, ##__VA_ARGS__)
-
-#define SYSTEM_OTP_BASE			0x27100000
-#define SYSTEM_OTP2_BS          0x0
-
-#define PIF_BS                  0x1100
+#define PIF_BS                  (0x1100)
 #define PIF_OTP2_LOCK           (PIF_BS + 0x10)
 #define PIF_OTP2_SECRP_PROT_EN  (PIF_BS + 0x20)
 #define PIF_OTP2_CDE_SECRP      (PIF_BS + 0x24)
 #define PIF_OTP2_LVL2LCK        (PIF_BS + 0x5C)
 
-#define CFG_BS                  0x1280
+#define CFG_BS                  (0x1280)
 #define CFG_INTERRUPT           (CFG_BS + 0x10)
 #define CFG_BUSY                (CFG_BS + 0x20)
 #define CFG_PDSTB               (CFG_BS + 0x24)
@@ -44,49 +41,63 @@
 
 #define DEVICE_NAME  "otp"
 
+struct sophon_otp {
+	void __iomem            *regs;
+	struct clk_bulk_data	*clks;
+	int num_clks;
+};
+
+/* list of required clocks */
+static const char * const sophon_otp_clocks[] = {
+	"otp_c", "otp", "apb_otp",
+};
+
 static void __iomem *otp_base;
 static int otp_major;
 static struct class *otp_class;
 
-static inline void mmio_write_32(void __iomem *addr, uint32_t value)
+static int cvi_otp_enter_sleep_mode(void)
 {
-	iowrite32(value, addr);
-}
+	u32 value;
+	unsigned long timeout;
 
-static inline uint32_t mmio_read_32(void __iomem *addr)
-{
-	return ioread32(addr);
-}
-
-static inline void mmio_setbits_32(void __iomem *addr, uint32_t set)
-{
-	mmio_write_32(addr, mmio_read_32(addr) | set);
-}
-
-static inline void cvi_otp_enter_sleep_mode(void)
-{
-	uint32_t value;
-
-	value = mmio_read_32(otp_base + CFG_PDSTB);
-	if ((value & 0x1) == 1) {
-		mmio_write_32(otp_base + CFG_PDSTB, 0);
-		while ((value = mmio_read_32(otp_base + CFG_BUSY)) & 0xC);
+	value = ioread32(otp_base + CFG_PDSTB);
+	if ((value & 0x1)) {
+		iowrite32(0, otp_base + CFG_PDSTB);
+		timeout = jiffies + HZ;
+		while ((value = ioread32(otp_base + CFG_BUSY)) & 0xC) {
+			if (time_after(jiffies, timeout)) {
+				pr_err("enter sleep timeout\n");
+				return -1;
+			}
+		}
 	} else {
-		pr_info("otp is already sleep mode\n");
+		pr_debug("otp is already sleep mode\n");
 	}
+
+	return 0;
 }
 
-static inline void cvi_otp_enter_active_mode(void)
+static int cvi_otp_enter_active_mode(void)
 {
-	uint32_t value;
+	u32 value;
+	unsigned long timeout;
 
-	value = mmio_read_32(otp_base + CFG_PDSTB);
-	if ((value & 0x1) == 0) {
-		mmio_write_32(otp_base + CFG_PDSTB, 1);
-		while (((value = mmio_read_32(otp_base + CFG_BUSY)) & 0x1));
+	value = ioread32(otp_base + CFG_PDSTB);
+	if (!(value & 0x1)) {
+		iowrite32(1, otp_base + CFG_PDSTB);
+		timeout = jiffies + HZ;
+		while (((value = ioread32(otp_base + CFG_BUSY)) & 0x1)) {
+			if (time_after(jiffies, timeout)) {
+				pr_err("enter active timeout\n");
+				return -1;
+			}
+		}
 	} else {
-		pr_info("otp is already active mode\n");
+		pr_debug("otp is already active mode\n");
 	}
+
+	return 0;
 }
 
 static inline void cvi_otp_power_switch(int on)
@@ -98,10 +109,34 @@ static inline void cvi_otp_power_switch(int on)
 	}
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int sophon_otp_suspend(struct device *dev)
+{
+	struct sophon_otp *otp = dev_get_drvdata(dev);
+
+	clk_bulk_disable_unprepare(otp->num_clks, otp->clks);
+
+	return 0;
+}
+
+static int sophon_otp_resume(struct device *dev)
+{
+	struct sophon_otp *otp = dev_get_drvdata(dev);
+	int err = clk_bulk_prepare_enable(otp->num_clks, otp->clks);
+
+	if (err)
+		return err;
+
+	return 0;
+}
+#endif /* CONFIG_PM_SLEEP */
+
+static SIMPLE_DEV_PM_OPS(sophon_otp_pm_ops, sophon_otp_suspend, sophon_otp_resume);
+
 static inline uint32_t otp2_segment_read(uint32_t segment, uint32_t addr)
 {
-	pr_info("otp2 read 0x%lx \n", (SYSTEM_OTP_BASE + SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2)));
-	return mmio_read_32(otp_base + SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2));
+	pr_debug("otp2 read 0x%lx\n", (SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2)));
+	return ioread32(otp_base + SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2));
 }
 
 static void otp2_segment_dump(uint32_t segment)
@@ -117,15 +152,16 @@ static void otp2_segment_dump(uint32_t segment)
 
 static inline void otp2_segment_addr_program(uint32_t segment, uint32_t addr, uint32_t value)
 {
-	pr_info("otp2 program 0x%x : 0x%x\n", (SYSTEM_OTP_BASE + SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2)), value);
-	mmio_write_32(otp_base + SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2), value);
+	pr_debug("otp2 program 0x%x:0x%x\n", (SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2))
+			, value);
+	iowrite32(value, otp_base + SYSTEM_OTP2_BS + (((segment << 5) + addr) << 2));
 }
 
 static void otp2_segment_program(uint32_t segment, uint32_t *value, uint32_t size)
 {
 	uint32_t i = 0;
 
-	if (size > 32) 
+	if (size > 32)
 		size = 32;
 
 	for (;i < size; i++) {
@@ -140,7 +176,7 @@ static int otp3_read(uint32_t segment, uint32_t addr, uint32_t size, uint32_t *b
 	struct arm_smccc_res res = {0};
 	phys_addr_t value_phys;
 
-	pr_info("segment[%d] addr[%d] size[%d]\n", segment, addr, size);
+	pr_debug("segment[%d] addr[%d] size[%d]\n", segment, addr, size);
 
 	value = kzalloc((size << 2), GFP_KERNEL);
 	if (!value) {
@@ -151,7 +187,7 @@ static int otp3_read(uint32_t segment, uint32_t addr, uint32_t size, uint32_t *b
 
 	arm_smccc_smc(OPTEE_SMC_CALL_CV_OTP3_READ, segment, addr, size, (unsigned long)value_phys, 0, 0, 0, &res);
 	if (res.a0 < 0) {
-		ERROR("smc OPTEE_SMC_CALL_CV_OTP3_READ failed\n");
+		pr_err("smc OPTEE_SMC_CALL_CV_OTP3_READ failed\n");
 		kfree(value);
 		return -1;
 	}
@@ -180,7 +216,7 @@ static int otp3_write(uint32_t segment, uint32_t addr, uint32_t size, uint32_t *
 
 	arm_smccc_smc(OPTEE_SMC_CALL_CV_OTP3_WRITE, segment, addr, size, (unsigned long)value_phys, 0, 0, 0, &res);
 	if (res.a0 < 0) {
-		ERROR("smc OPTEE_SMC_CALL_CV_OTP3_WRITE failed\n");
+		pr_err("smc OPTEE_SMC_CALL_CV_OTP3_WRITE failed\n");
 		kfree(value);
 		return -1;
 	}
@@ -225,7 +261,7 @@ static ssize_t otp3_reserve_segment2_store(struct class *class,
 	if (sscanf(buf, "0x%x=0x%x", &addr, &value) != 2)
 		return -ENOMEM;
 
-	pr_info("addr=%x value=%x\n", addr, value);
+	pr_debug("addr=%x value=%x\n", addr, value);
 	if (addr > 31)
 		return -1;
 
@@ -255,7 +291,7 @@ static ssize_t otp3_reserve_segment3_store(struct class *class,
 	if (sscanf(buf, "0x%x=0x%x", &addr, &value) != 2)
 		return -ENOMEM;
 
-	pr_info("addr=%x value=%x\n", addr, value);
+	pr_debug("addr=%x value=%x\n", addr, value);
 	if (addr > 31)
 		return -1;
 
@@ -294,7 +330,7 @@ static ssize_t otp2_reserve_segment0_store(struct class *class,
 	if (sscanf(buf, "0x%x=0x%x", &addr, &value) != 2)
 		return -ENOMEM;
 
-	pr_info("addr=%x value=%x\n", addr, value);
+	pr_debug("addr=%x value=%x\n", addr, value);
 	if (addr > 31)
 		return -1;
 
@@ -340,7 +376,9 @@ static long otp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case IOCTL_OTP_VERSION: {
-		uint32_t version = mmio_read_32(otp_base + CFG_BS);
+		u32 version;
+
+		version = ioread32(otp_base + CFG_BS);
 
 		ret = copy_to_user((unsigned char *)arg, (unsigned char *)&version, sizeof(version));
 		if (ret != 0)
@@ -454,16 +492,35 @@ const struct file_operations otp_fops = {
 	.unlocked_ioctl = otp_ioctl,
 };
 
-int __init cvi_otp_init(void)
+static int sophon_otp_probe(struct platform_device *pdev)
 {
-	int ret;
+	struct device *dev = &pdev->dev;
+	struct sophon_otp *otp;
+	int ret, i;
 
-	otp_base = ioremap(SYSTEM_OTP_BASE, 0x2000);
-	if (otp_base == NULL)
+	otp = devm_kzalloc(dev, sizeof(*otp), GFP_KERNEL);
+	if (!otp)
 		return -ENOMEM;
 
-	// No need op
-	//mmio_setbits_32(otp_base + CFG_WAKE_UP_TIME, 0x3);
+	otp_base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(otp_base))
+		return PTR_ERR(otp_base);
+
+	otp->regs = otp_base;
+	otp->num_clks = ARRAY_SIZE(sophon_otp_clocks);
+	otp->clks = devm_kcalloc(dev, otp->num_clks
+				    , sizeof(*otp->clks), GFP_KERNEL);
+	if (!otp->clks)
+		return -ENOMEM;
+
+	for (i = 0; i < otp->num_clks; ++i)
+		otp->clks[i].id = sophon_otp_clocks[i];
+
+	ret = devm_clk_bulk_get(dev, otp->num_clks, otp->clks);
+	if (ret)
+		return ret;
+
+	clk_bulk_prepare_enable(otp->num_clks, otp->clks);
 
 	otp_major = register_chrdev(0, DEVICE_NAME, &otp_fops);
 	if (otp_major < 0) {
@@ -479,24 +536,24 @@ int __init cvi_otp_init(void)
 
 	ret = class_create_file(otp_class, &class_attr_otp3_reserve_segment2);
 	if (ret) {
-		pr_err("base: can't create sysfs otp3_reserve_segment0 file\n");
+		pr_err("can't create sysfs otp3_reserve_segment0 file\n");
 		goto failed;
 	}
 
 	ret = class_create_file(otp_class, &class_attr_otp3_reserve_segment3);
 	if (ret) {
-		pr_err("base: can't create sysfs otp3_reserve_segment0 file\n");
+		pr_err("can't create sysfs otp3_reserve_segment0 file\n");
 		goto failed;
 	}
 
 	ret = class_create_file(otp_class, &class_attr_otp2_reserve_segment0);
 	if (ret) {
-		pr_err("base: can't create sysfs otp3_reserve_segment0 file\n");
+		pr_err("can't create sysfs otp3_reserve_segment0 file\n");
 		goto failed;
 	}
 
 	device_create(otp_class, NULL, MKDEV(otp_major, 0), NULL, DEVICE_NAME);
-
+	platform_set_drvdata(pdev, otp);
 	return 0;
 failed:
 	if (otp_major) {
@@ -511,10 +568,8 @@ failed:
 	return -1;
 }
 
-void __exit cvi_otp_exit(void)
+static int sophon_otp_remove(struct platform_device *pdev)
 {
-	iounmap(otp_base);
-
 	class_remove_file(otp_class, &class_attr_otp2_reserve_segment0);
 	class_remove_file(otp_class, &class_attr_otp3_reserve_segment2);
 	class_remove_file(otp_class, &class_attr_otp3_reserve_segment3);
@@ -522,11 +577,26 @@ void __exit cvi_otp_exit(void)
 	device_destroy(otp_class, MKDEV(otp_major, 0));
 	class_destroy(otp_class);
 	unregister_chrdev(otp_major, DEVICE_NAME);
+
+	return 0;
 }
 
-module_init(cvi_otp_init);
-module_exit(cvi_otp_exit);
+static const struct of_device_id sophon_otp_match[] = {
+	{ .compatible = "sophon,secure-otp",},
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, sophon_otp_match);
 
-MODULE_AUTHOR("leon.liao@sophgo.com");
-MODULE_DESCRIPTION("secure otp driver");
-MODULE_LICENSE("GPL");
+static struct platform_driver sophon_otp_driver = {
+	.probe = sophon_otp_probe,
+	.remove = sophon_otp_remove,
+	.driver = {
+		.name = "sophon-otp",
+		.of_match_table = sophon_otp_match,
+		.pm     = &sophon_otp_pm_ops,
+	},
+};
+
+module_platform_driver(sophon_otp_driver);
+MODULE_DESCRIPTION("Sophon OTP driver");
+MODULE_LICENSE("GPL v2");

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/clk-provider.h>
@@ -129,33 +130,6 @@ static inline void dwc_dump_lli(struct dw_dma_chan *dwc, struct dw_desc *desc)
 		lli_read(desc, block_ts));
 }
 
-#if 0
-#define ENABLE_ALL_REG_STATUS	(0x3 << 0 | 0xFFF << 3 | 0x3F << 16 | 0x1F << 27)
-static void dwc_interrupts_set(struct dw_dma_chan *dwc, bool val)
-{
-	u64 int_val;
-
-	if (val) {
-		/* channel int signal enable*/
-		int_val = DWC_CH_INTSIG_DMA_TRA_DONE;
-		channel_writeq(dwc, INTSIGNAL_ENABLEREG, int_val);
-
-		/*  channel int status enable in reg, all enable*/
-		channel_writeq(dwc, INTSTATUS_ENABLEREG, ENABLE_ALL_REG_STATUS);
-	} else {
-		/* channel int signal disable*/
-		int_val = channel_readq(dwc, INTSIGNAL_ENABLEREG);
-		int_val &= ~DWC_CH_INTSIG_DMA_TRA_DONE;
-		channel_writeq(dwc, INTSIGNAL_ENABLEREG, int_val);
-		/*  channel int status disable in reg, all disable*/
-		int_val = channel_readq(dwc, INTSTATUS);
-		channel_writeq(dwc, INTCLEARREG, int_val);
-		int_val &= ~ENABLE_ALL_REG_STATUS;
-		channel_writeq(dwc, INTSTATUS_ENABLEREG, int_val);
-	}
-}
-#endif
-
 static void dwc_prepare_clk(struct dw_dma *dw)
 {
 	int err;
@@ -225,21 +199,8 @@ static void dwc_initialize(struct dw_dma_chan *dwc)
 	/* Enable interrupts */
 	if (test_bit(DW_DMA_IS_CYCLIC, &dwc->flags))
 		int_status_reg =  DWC_CH_INTSTA_BLOCK_TFR_DONE;
-	else {
+	else
 		int_status_reg =  DWC_CH_INTSTA_DMA_TFR_DONE;
-#if 0
-		| DWC_CH_INTSTA_BLOCK_TFR_DONE
-		| DWC_CH_INTSTA_SRC_TFR_COMP_EN
-		| DWC_CH_INTSTA_DST_TFR_COMP_EN
-		| DWC_CH_INTSTA_SRC_DEC_ERR_EN
-		| DWC_CH_INTSTA_DST_DEC_ERR_EN
-		| DWC_CH_INTSTA_LLI_RD_DEV_ERR_EN
-		| DWC_CH_INTSTA_LLI_WD_DEV_ERR_EN
-		| DWC_CH_INTSTA_LLI_RD_SLV_ERR_EN
-		| DWC_CH_INTSTA_LLI_WD_SLV_ERR_EN
-		| DWC_CH_INTSTA_CH_ABORTED_EN;
-#endif
-	}
 
 	channel_writeq(dwc, INTSTATUS_ENABLEREG, int_status_reg);
 
@@ -373,8 +334,6 @@ static dma_addr_t fix_dma_bug_copy_get(struct dw_dma_chan *dwc,
 	if (!db_sg) {
 		db_sg = kzalloc(sizeof(*db_sg), GFP_ATOMIC);
 		if (!db_sg) {
-			dev_err(chan->device->dev,
-				"BUG: Alloc db_sg failed,No memory !\n");
 			return 0;
 		}
 		dwc->bug_info = db_sg;
@@ -1560,11 +1519,6 @@ static void dw_dma_off(struct dw_dma *dw)
 	dma_writeq(dw, CFG, 0); /* disable dmac and interrupt */
 
 	/* Clear all interrupts on all channels. */
-#if 0
-	for (i = 0; i < dw->dma.chancnt; i++)
-		dwc_interrupts_set(&dw->chan[i], false);
-#endif
-
 	//while (dma_readq(dw, CFG) & DW_CFG_DMA_EN)
 	//	cpu_relax();
 
@@ -2045,8 +1999,8 @@ static int dw_dma_probe(struct platform_device *pdev)
 	name = pdev->dev.of_node->full_name;
 
 	dev_info(dev, "CVITEK DMA Controller, %d channels, name:%s probe done!\n",
-		 dw->nr_channels,name);
-	
+		 dw->nr_channels, name);
+
 	proc_dma_folder = proc_mkdir(name, NULL);
 	if (!proc_dma_folder)
 		dev_err(&pdev->dev, "Error creating sysDMA proc folder entry\n");

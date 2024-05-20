@@ -1,5 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0imx412
-// Copyright (c) 2017 Intel Corporation.
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * imx412 driver
+ *
+ * Copyright (C) 2024 Sophon Co., Ltd.
+ *
+ */
 #include <linux/clk.h>
 #include <linux/acpi.h>
 #include <linux/i2c.h>
@@ -31,7 +36,9 @@
 #define IMX412_CHIP_ID_ADDR_L	0x0017
 #define IMX412_CHIP_ID			0x0577
 
-
+/*Sensor type for isp middleware*/
+#define IMX412_SNS_TYPE_SDR V4L2_SONY_IMX412_MIPI_12M_30FPS_12BIT
+#define IMX412_SNS_TYPE_WDR V4L2_SNS_TYPE_BUTT  //mean unsupport wdr yet
 
 static const enum mipi_wdr_mode_e imx412_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
 
@@ -59,6 +66,7 @@ struct imx412_mode {
 	u32 exp_def;
 	u32 mipi_wdr_mode;
 	struct v4l2_fract max_fps;
+	sns_sync_info_t imx412_sync_info;
 	struct imx412_reg_list reg_list;
 	struct imx412_reg_list wdr_reg_list;
 };
@@ -190,10 +198,8 @@ static int imx412_write_regs(struct imx412 *imx412,
 		ret = imx412_write_reg(imx412, regs[i].address, 1,
 					regs[i].val);
 		if (ret) {
-			dev_err_ratelimited(
-				&client->dev,
-				"Failed to write reg 0x%4.4x. error = %d\n",
-				regs[i].address, ret);
+			dev_err_ratelimited(&client->dev, "Failed to write reg 0x%4.4x. error=%d\n",
+					    regs[i].address, ret);
 
 			return ret;
 		}
@@ -234,22 +240,20 @@ static int imx412_set_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-
 static const struct v4l2_ctrl_ops imx412_ctrl_ops = {
 	.s_ctrl = imx412_set_ctrl,
 };
 
 static int g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
-				struct v4l2_mbus_config *config)
+			 struct v4l2_mbus_config *config)
 {
 	config->type = V4L2_MBUS_CSI2_DPHY;
 	return 0;
 }
 
-
 static int enum_mbus_code(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_mbus_code_enum *code)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_mbus_code_enum *code)
 {
 	/* Only one bayer order(GRBG) is supported */
 	if (code->index > 0)
@@ -261,8 +265,8 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int enum_frame_size(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_pad_config *cfg,
-				   struct v4l2_subdev_frame_size_enum *fse)
+			   struct v4l2_subdev_pad_config *cfg,
+			   struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct imx412 *imx412 = to_imx412(sd);
 
@@ -274,8 +278,7 @@ static int enum_frame_size(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static void update_pad_format(const struct imx412_mode *mode,
-				      struct v4l2_subdev_format *fmt)
+static void update_pad_format(const struct imx412_mode *mode, struct v4l2_subdev_format *fmt)
 {
 	fmt->format.width = mode->width;
 	fmt->format.height = mode->height;
@@ -284,19 +287,18 @@ static void update_pad_format(const struct imx412_mode *mode,
 }
 
 static int get_pad_format(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct imx412 *imx412 = to_imx412(sd);
 	struct v4l2_mbus_framefmt *framefmt;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&imx412->mutex);
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		framefmt = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 		fmt->format = *framefmt;
-		mutex_unlock(&imx412->mutex);
-		return -ENOTTY;
+		ret = -ENOTTY;
 	} else {
 		update_pad_format(imx412->cur_mode, fmt);
 	}
@@ -306,8 +308,8 @@ static int get_pad_format(struct v4l2_subdev *sd,
 }
 
 static int set_pad_format(struct v4l2_subdev *sd,
-		       struct v4l2_subdev_pad_config *cfg,
-		       struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct imx412 *imx412 = to_imx412(sd);
 	struct imx412_mode *mode;
@@ -338,16 +340,14 @@ static int set_pad_format(struct v4l2_subdev *sd,
 
 static void imx412_standby(struct imx412 *imx412)
 {
-	imx412_write_reg(imx412, 0x3000, REG_VALUE_08BIT, 0x01);/* STANDBY */
-	imx412_write_reg(imx412, 0x3002, REG_VALUE_08BIT, 0x01);/* XTMSTA */
-	printk("[imx412] standby\n");
+	imx412_write_reg(imx412, 0x3000, REG_VALUE_08BIT, 0x01);
+	imx412_write_reg(imx412, 0x3002, REG_VALUE_08BIT, 0x01);
 }
 
 static void imx412_restart(struct imx412 *imx412)
 {
-	imx412_write_reg(imx412, 0x3000, REG_VALUE_08BIT, 0x00);/* STANDBY */
-	imx412_write_reg(imx412, 0x3002, REG_VALUE_08BIT, 0x00);/* XTMSTA */
-	printk("[imx412] restart\n");
+	imx412_write_reg(imx412, 0x3000, REG_VALUE_08BIT, 0x00);
+	imx412_write_reg(imx412, 0x3002, REG_VALUE_08BIT, 0x00);
 }
 
 /* Start streaming */
@@ -355,10 +355,10 @@ static int start_streaming(struct imx412 *imx412)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&imx412->sd);
 	const struct imx412_reg_list *reg_list;
+	const sns_sync_info_t *sync_info;
 	int ret;
 
 	if (imx412->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-		printk("[imx412] linear setting\n");
 		reg_list = &imx412->cur_mode->reg_list;
 	}
 
@@ -368,13 +368,24 @@ static int start_streaming(struct imx412 *imx412)
 		return ret;
 	}
 
-	usleep_range(100 * 1000, 120 * 2000);
+	sync_info = &imx412->cur_mode->imx412_sync_info;
+
+	if (sync_info->num_of_regs > 0) {
+		ret = imx412_write_regs(imx412, (struct imx412_reg *)sync_info->regs,
+					sync_info->num_of_regs);
+		if (ret) {
+			dev_err(&client->dev, "%s failed to set default\n", __func__);
+			return ret;
+		}
+	}
+
+	usleep_range(100 * 1000, 200 * 1000);
 	/* Apply customized values from user */
 	ret =  __v4l2_ctrl_handler_setup(imx412->sd.ctrl_handler);
 	if (ret)
 		return ret;
 
-	printk("[imx412] init reg done\n");
+	dev_info(&client->dev, "wdr_mode(%d) reg setting done\n", imx412->cur_mode->mipi_wdr_mode);
 
 	return ret;
 }
@@ -391,8 +402,6 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	struct imx412 *imx412 = to_imx412(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0;
-
-	printk("[imx412] set stream(%d)\n", enable);
 
 	mutex_lock(&imx412->mutex);
 	if (imx412->streaming == enable) {
@@ -422,7 +431,7 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	imx412->streaming = enable;
 	mutex_unlock(&imx412->mutex);
 
-	printk("[imx412] set stream success\n");
+	dev_info(&client->dev, "set stream(%d) success\n", enable);
 
 	return ret;
 
@@ -470,9 +479,9 @@ error:
 /* Verify chip ID */
 static int imx412_identify_module(struct imx412 *imx412)
 {
-	// struct i2c_client *client = v4l2_get_subdevdata(&imx412->sd);
+	struct i2c_client *client = v4l2_get_subdevdata(&imx412->sd);
 	int ret;
-	int nVal, nVal2;
+	int val1, val2;
 	int read_data = 0;
 
 	imx412_write_reg(imx412, 0x3000, REG_VALUE_08BIT, 0x01);/* STANDBY */
@@ -481,20 +490,20 @@ static int imx412_identify_module(struct imx412 *imx412)
 	usleep_range(20 * 1000, 20 * 1000);
 
 	ret = imx412_read_reg(imx412, IMX412_CHIP_ID_ADDR_H,
-			       REG_VALUE_08BIT, &nVal);
+			       REG_VALUE_08BIT, &val1);
 
-	printk("[imx412] read id:0x%x, ret:%d", nVal, ret);
+	dev_info(&client->dev, "read id:0x%x, ret:%d", val1, ret);
 
 	if (ret)
 		return ret;
 
 	ret = imx412_read_reg(imx412, IMX412_CHIP_ID_ADDR_L,
-			       REG_VALUE_08BIT, &nVal2);
+			       REG_VALUE_08BIT, &val2);
 
-	read_data = ((nVal & 0xFF) << 8) | (nVal2 & 0xFF);
+	read_data = ((val1 & 0xFF) << 8) | (val2 & 0xFF);
 
 	if (read_data != IMX412_CHIP_ID) {
-		printk("chip id(%x) mismatch, read(%x)\n",
+		dev_err(&client->dev, "chip id(%x) mismatch, read(%x)\n",
 			IMX412_CHIP_ID, read_data);
 		return -EIO;
 	}
@@ -506,7 +515,8 @@ static void imx412_mirror_flip(struct imx412 *imx412, int orient)
 {
 	int Filp = 0;
 	int Mirror = 0;
-	printk("[imx412] set mirror_flip:%d", orient);
+
+	pr_info("set mirror_flip:%d", orient);
 
 	switch (orient) {
 	case 0:
@@ -541,7 +551,7 @@ static int imx412_update_link_menu(struct imx412 *imx412)
 
 	imx412_link_cif_menu[id][wdr_index] = imx412->cur_mode->mipi_wdr_mode;
 
-	printk("[imx412] update mipi_mode:%lld", imx412_link_cif_menu[id][wdr_index]);
+	dev_info(&client->dev, "update mipi_mode:%lld", imx412_link_cif_menu[id][wdr_index]);
 
 	ctrl_hdlr = imx412->sd.ctrl_handler;
 	v4l2_ctrl_handler_free(ctrl_hdlr);
@@ -554,11 +564,9 @@ static int imx412_update_link_menu(struct imx412 *imx412)
 	}
 
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&imx412_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					imx412_link_cif_menu[id][i], 0,
-					(const s64 * )imx412_link_cif_menu[id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx412_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      imx412_link_cif_menu[id][i], 0,
+					       (const s64 *)imx412_link_cif_menu[id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -588,8 +596,11 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_GET_TYPE:
 	{
 		int type = 0;
+
 		if (imx412->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-			type = V4L2_SONY_IMX412_MIPI_12M_30FPS_12BIT;
+			type = IMX412_SNS_TYPE_SDR;
+		} else {//wdr
+			type = IMX412_SNS_TYPE_WDR;
 		}
 		memcpy(arg, &type, sizeof(int));
 		break;
@@ -598,6 +609,7 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_MIRROR_FLIP:
 	{
 		int orient = 0;
+
 		memcpy(&orient, arg, sizeof(int));
 		imx412_mirror_flip(imx412, orient);
 		break;
@@ -607,6 +619,7 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		struct i2c_client *client = v4l2_get_subdevdata(&imx412->sd);
 		sns_i2c_info_t i2c_info;
+
 		i2c_info.i2c_addr =  client->addr;
 		i2c_info.i2c_idx  =  client->adapter->i2c_idx;
 		memcpy(arg, &i2c_info, sizeof(sns_i2c_info_t));
@@ -616,20 +629,27 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_HDR_ON:
 	{
 		int hdr_on = 0;
+		struct i2c_client *client = v4l2_get_subdevdata(&imx412->sd);
+
 		memcpy(&hdr_on, arg, sizeof(int));
 
-		if (hdr_on) {
-			printk("Not support WDR!\n");
-		} else {
+		if (hdr_on)
+			dev_warn(&client->dev, "Not support HDR!\n");
+		else
 			imx412->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
-		}
+
 		imx412_update_link_menu(imx412);
+		break;
+	}
+
+	case SNS_V4L2_SET_SNS_SYNC_INFO:
+	{
+		memcpy(&imx412->cur_mode->imx412_sync_info, arg, sizeof(sns_sync_info_t));
 		break;
 	}
 
 	default:
 		ret = -ENOIOCTLCMD;
-		printk("[imx412] unknown ioctl cmd:%d", cmd);
 		break;
 	}
 
@@ -642,7 +662,6 @@ static long imx412_compat_ioctl32(struct v4l2_subdev *sd,
 {
 	void __user *up = compat_ptr(arg);
 	long ret;
-	printk("[imx412] compat ioctl cmd:%d", cmd);
 
 	switch (cmd) {
 	default:
@@ -708,15 +727,12 @@ static int imx412_init_controls(struct imx412 *imx412, int index_id)
 	mutex_init(&imx412->mutex);
 	ctrl_hdlr->lock = &imx412->mutex;
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		if (SNS_CFG_TYPE_WDR_MODE == i) {
+		if (i == SNS_CFG_TYPE_WDR_MODE)
 			imx412->cur_mode->mipi_wdr_mode = imx412_link_cif_menu[index_id][i];
-		}
 
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&imx412_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					imx412_link_cif_menu[index_id][i], 0,
-					(const s64 * )imx412_link_cif_menu[index_id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx412_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      imx412_link_cif_menu[index_id][i], 0,
+					       (const s64 *)imx412_link_cif_menu[index_id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -767,33 +783,29 @@ static int imx412_probe(struct i2c_client *client,
 	int ret = -1;
 	int i;
 
-	printk("[imx412] probe id[%d] start\n", imx412_probe_index);
+	dev_info(dev, "probe id[%d] start\n", imx412_probe_index);
 
 	imx412_probe_index++;
 
 	if (index_id >= MAX_SENSOR_DEVICE || index_id < 0) {
-		printk("[imx412] invalid devid(%d)\n", index_id);
+		dev_info(dev, "invalid devid(%d)\n", index_id);
 		return ret;
 	}
 
 	imx412 = devm_kzalloc(&client->dev, sizeof(*imx412), GFP_KERNEL);
-	if (!imx412) {
-		dev_err(dev, "Failed to alloc devmem!\n");
+	if (!imx412)
 		return -ENOMEM;
-	}
 
 	sd = &imx412->sd;
 
 	for (i = 0; i < addr_num; i++) {
-		if (force_bus[index_id] < 0) {
+		if (force_bus[index_id] < 0)
 			bus_id = imx412_bus_map[index_id];
-		} else {
+		else
 			bus_id = force_bus[index_id];
-		}
 
-		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM) {
+		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM)
 			return ret;
-		}
 
 		client->addr = imx412_i2c_list[i];
 		client->adapter = i2c_get_adapter(bus_id);
@@ -803,16 +815,16 @@ static int imx412_probe(struct i2c_client *client,
 		/* Check module identity */
 		ret = imx412_identify_module(imx412);
 		if (ret) {
-			printk("id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
-				index_id, bus_id, i, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
+				 index_id, bus_id, i, client->addr);
 
-			if (i == addr_num - 1) {
+			if (i == addr_num - 1)
 				return ret;
-			}
-			continue;;
+
+			continue;
 		} else {
-			printk("id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
-				index_id, bus_id, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
+				 index_id, bus_id, client->addr);
 			break;
 		}
 	}
@@ -821,25 +833,21 @@ static int imx412_probe(struct i2c_client *client,
 
 	if (index_id >= ARRAY_SIZE(supported_modes)) {
 		imx412->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct imx412_mode), GFP_KERNEL);
-
-		memcpy(imx412->cur_mode, &supported_modes[0],
-					sizeof(struct imx412_mode));
+						 sizeof(struct imx412_mode), GFP_KERNEL);
+		memcpy(imx412->cur_mode, &supported_modes[0], sizeof(struct imx412_mode));
 	} else {
 		imx412->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct imx412_mode), GFP_KERNEL);
-
-		memcpy(imx412->cur_mode, &supported_modes[index_id],
-					sizeof(struct imx412_mode));
+						 sizeof(struct imx412_mode), GFP_KERNEL);
+		memcpy(imx412->cur_mode, &supported_modes[index_id], sizeof(struct imx412_mode));
 	}
 
+	memset(&imx412->cur_mode->imx412_sync_info, 0, sizeof(sns_sync_info_t));
 
 	mutex_init(&imx412->mutex);
 
 	ret = imx412_init_controls(imx412, index_id);
-	if (ret) {
+	if (ret)
 		return ret;
-	}
 
 	/* Initialize subdev */
 	sd->internal_ops = &imx412_internal_ops;
@@ -872,7 +880,7 @@ static int imx412_probe(struct i2c_client *client,
 	pm_runtime_enable(&client->dev);
 	pm_runtime_idle(&client->dev);
 
-	printk("[imx412] sensor_%d probe success\n", index_id);
+	dev_info(dev, "sensor_%d probe success\n", index_id);
 
 	return 0;
 
@@ -930,7 +938,8 @@ static struct i2c_driver imx412_i2c_driver = {
 
 static int __init sensor_mod_init(void)
 {
-	printk("== imx412 mod add ==\n");
+	pr_info("== imx412 mod add ==\n");
+
 	return i2c_add_driver(&imx412_i2c_driver);
 }
 

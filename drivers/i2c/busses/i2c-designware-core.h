@@ -244,7 +244,7 @@ struct dw_i2c_dev {
 	struct clk		*pclk;
 	struct reset_control	*rst;
 	struct i2c_client		*slave;
-	u32			(*get_clk_rate_khz) (struct dw_i2c_dev *dev);
+	u32			(*get_clk_rate_khz)(struct dw_i2c_dev *dev);
 	int			cmd_err;
 	struct i2c_msg		*msgs;
 	int			msgs_num;

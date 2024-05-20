@@ -27,6 +27,15 @@
 #define DEFINE_CSC_COEF2(a, b, c) \
 		.coef[2][0] = a, .coef[2][1] = b, .coef[2][2] = c,
 
+#define RETRAIN_REG        0x281000F4
+#define GP_REG             0x281000F8
+#define DISP_FPS_CNT       10
+#define DISP_FPS_TABLE_CNT 6
+#define DISP_MAX_INST      2
+
+static void *gp_reg;
+static void *retrain_reg;
+
 static struct disp_csc_matrix csc_mtrx[DISP_CSC_MAX] = {
 	// none
 	{
@@ -454,6 +463,95 @@ static void disp_crtc_finish_page_flip(struct cvitek_crtc *crtc)
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 }
 
+u64 timespec64_to_us(struct timespec64 *disp_time_spec)
+{
+	return disp_time_spec->tv_sec * 1000000L + disp_time_spec->tv_nsec / 1000L;
+}
+
+bool ddr_need_retrain(void)
+{
+	if (retrain_reg)
+		return ioread32(retrain_reg) & 0xF;
+	else
+		return false;
+}
+
+void trigger_8051(void)
+{
+	if (gp_reg && retrain_reg) {
+		iowrite32(ioread32(gp_reg) | 0x10000, gp_reg);
+		iowrite32(ioread32(retrain_reg) & ~0xF, retrain_reg);
+	}
+}
+
+bool disp_check_tgen_enable(u8 inst)
+{
+	bool is_enable = (_reg_read(REG_DISP_CFG(inst)) & 0x80);
+
+	return is_enable;
+}
+
+static void ddr_retrain(int disp_id, union disp_intr intr_status)
+{
+
+	static struct timespec64 disp_last_overlap_time;
+	static const u8 disp_fps_table[DISP_FPS_TABLE_CNT] = {24, 25, 30, 48, 50, 60};
+	static const u16 disp_margin_table[DISP_FPS_TABLE_CNT] = {489, 460, 345, 129, 115, 57};
+	static u8 disp_fps[DISP_MAX_INST], disp_fps_cnt[DISP_MAX_INST];
+	static u16 disp_margin_time[DISP_MAX_INST];
+	static struct timespec64 disp_frame_end_time[DISP_MAX_INST];
+	static struct timespec64 disp_fps_time[DISP_MAX_INST];
+	u64 disp_frame_end_time_us[DISP_MAX_INST], disp_frame_gap_time_ms[DISP_MAX_INST];
+	struct timespec64 disp_cur_overlap_time;
+	u8 i = 0;
+
+	if (intr_status.b.disp_frame_done) {
+		disp_cur_overlap_time = disp_frame_end_time[disp_id] = ktime_to_timespec64(ktime_get());
+		disp_frame_end_time_us[disp_id] = timespec64_to_us(&disp_frame_end_time[disp_id]);
+		disp_frame_end_time_us[!disp_id] = timespec64_to_us(&disp_frame_end_time[!disp_id]);
+
+		if (disp_fps_cnt[disp_id] < DISP_FPS_CNT) {
+			if (!disp_fps_cnt[disp_id])
+				disp_fps_time[disp_id] = disp_frame_end_time[disp_id];
+			disp_fps_cnt[disp_id]++;
+		} else if (disp_fps_cnt[disp_id] == DISP_FPS_CNT) {
+			disp_fps_cnt[disp_id]++;
+			disp_frame_gap_time_ms[disp_id] = disp_frame_end_time_us[disp_id] / 1000L
+							- timespec64_to_us(&disp_fps_time[disp_id]) / 1000L;
+			disp_fps[disp_id] = (DISP_FPS_CNT * 10000 / disp_frame_gap_time_ms[disp_id] + 5) / 10;
+			DRM_DEBUG("disp%d fps:%d\n", disp_id, disp_fps[disp_id]);
+		}
+
+		if ((disp_frame_end_time_us[disp_id] > disp_frame_end_time_us[!disp_id])) {
+			if ((disp_margin_time[disp_id] == 0) && (disp_fps[!disp_id] != 0)) {
+				for (i = 0; i < DISP_FPS_TABLE_CNT; i++) {
+					if ((disp_fps[!disp_id] <= disp_fps_table[i])
+						|| (i == DISP_FPS_TABLE_CNT - 1)) {
+						disp_margin_time[disp_id] = disp_margin_table[i];
+						DRM_DEBUG("disp%d ahead disp%d, margin time(%d)\n"
+							, !disp_id, disp_id, disp_margin_time[disp_id]);
+						break;
+					}
+				}
+			}
+			if ((disp_frame_end_time_us[disp_id] - disp_frame_end_time_us[!disp_id]
+				< disp_margin_time[disp_id]) || !disp_check_tgen_enable(!disp_id)) {
+				if (ddr_need_retrain())
+					trigger_8051();
+				if (timespec64_to_us(&disp_cur_overlap_time)
+					- timespec64_to_us(&disp_last_overlap_time) > 900000L)
+					DRM_DEBUG("disp%d ahead disp%d, vblanking overlap. "
+						"margin(%lld)us last overlap is (%lld)ms before.\n"
+						, !disp_id, disp_id
+						, disp_frame_end_time_us[disp_id] - disp_frame_end_time_us[!disp_id]
+						, (timespec64_to_us(&disp_cur_overlap_time)
+							- timespec64_to_us(&disp_last_overlap_time)) / 1000);
+				disp_last_overlap_time = disp_cur_overlap_time;
+			}
+		}
+	}
+}
+
 
 static irqreturn_t disp_irq_handler(int irq, void *data)
 {
@@ -473,6 +571,11 @@ static irqreturn_t disp_irq_handler(int irq, void *data)
 	// /* IC bug need clear twice */
 	disp_intr_clr(ctx->disp_id, intr_status);
 	disp_intr_clr(ctx->disp_id, intr_status);
+
+	if (intr_status.b.disp_frame_done) {
+		ddr_retrain(ctx->disp_id, intr_status);
+	}
+
 	/* vblank irq */
 	if (intr_status.b.up_1t) {
 		drm_crtc_handle_vblank(crtc);
@@ -1091,6 +1194,11 @@ static int cvitek_drm_crtc_init(struct platform_device *pdev, struct drm_device 
 	}
 
 	drm_crtc_helper_add(crtc, match_data->crtc_helper_funcs);
+
+	if (!gp_reg)
+		gp_reg = ioremap(GP_REG, 4);
+	if (!retrain_reg)
+		retrain_reg = ioremap(RETRAIN_REG, 4);
 
 	return 0;
 }

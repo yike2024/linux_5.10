@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
-// Copyright (c) 2017 Intel Corporation.
+/*
+ * imx327 driver
+ *
+ * Copyright (C) 2024 Sophon Co., Ltd.
+ *
+ */
 #include <linux/clk.h>
 #include <linux/acpi.h>
 #include <linux/i2c.h>
@@ -31,6 +36,10 @@
 #define IMX327_CHIP_ID			0X6
 #define IMX327_CHIP_ID_MASK		0x6
 
+/*Sensor type for isp middleware*/
+#define IMX327_SNS_TYPE_SDR V4L2_SONY_IMX327_2L_MIPI_2M_30FPS_12BIT
+#define IMX327_SNS_TYPE_WDR V4L2_SONY_IMX327_2L_MIPI_2M_30FPS_12BIT_WDR2TO1
+
 static const enum mipi_wdr_mode_e imx327_wdr_mode = CVI_MIPI_WDR_MODE_DOL;
 
 static int imx327_count;
@@ -40,7 +49,6 @@ module_param_array(force_bus, int, &imx327_count, 0644);
 static int imx327_probe_index;
 static const unsigned short imx327_i2c_list[] = {0x1a};
 static const int imx327_bus_map[MAX_SENSOR_DEVICE] = {1, -1, -1, -1, -1, -1};
-static sns_sync_info_t g_sns_sync_info;
 
 struct imx327_reg_list {
 	u32 num_of_regs;
@@ -58,6 +66,7 @@ struct imx327_mode {
 	u32 exp_def;
 	u32 mipi_wdr_mode;
 	struct v4l2_fract max_fps;
+	sns_sync_info_t imx327_sync_info;
 	struct imx327_reg_list reg_list;
 	struct imx327_reg_list wdr_reg_list;
 };
@@ -193,10 +202,8 @@ static int imx327_write_regs(struct imx327 *imx327,
 		ret = imx327_write_reg(imx327, regs[i].address, 1,
 					regs[i].val);
 		if (ret) {
-			dev_err_ratelimited(
-				&client->dev,
-				"Failed to write reg 0x%4.4x. error = %d\n",
-				regs[i].address, ret);
+			dev_err_ratelimited(&client->dev, "Failed to write reg 0x%4.4x. error=%d\n",
+					    regs[i].address, ret);
 
 			return ret;
 		}
@@ -237,22 +244,20 @@ static int imx327_set_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-
 static const struct v4l2_ctrl_ops imx327_ctrl_ops = {
 	.s_ctrl = imx327_set_ctrl,
 };
 
 static int g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
-				struct v4l2_mbus_config *config)
+			 struct v4l2_mbus_config *config)
 {
 	config->type = V4L2_MBUS_CSI2_DPHY;
 	return 0;
 }
 
-
 static int enum_mbus_code(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_mbus_code_enum *code)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_mbus_code_enum *code)
 {
 	/* Only one bayer order(GRBG) is supported */
 	if (code->index > 0)
@@ -264,8 +269,8 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int enum_frame_size(struct v4l2_subdev *sd,
-				   struct v4l2_subdev_pad_config *cfg,
-				   struct v4l2_subdev_frame_size_enum *fse)
+			   struct v4l2_subdev_pad_config *cfg,
+			   struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct imx327 *imx327 = to_imx327(sd);
 
@@ -277,8 +282,7 @@ static int enum_frame_size(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static void update_pad_format(const struct imx327_mode *mode,
-				      struct v4l2_subdev_format *fmt)
+static void update_pad_format(const struct imx327_mode *mode, struct v4l2_subdev_format *fmt)
 {
 	fmt->format.width = mode->width;
 	fmt->format.height = mode->height;
@@ -287,19 +291,18 @@ static void update_pad_format(const struct imx327_mode *mode,
 }
 
 static int get_pad_format(struct v4l2_subdev *sd,
-				  struct v4l2_subdev_pad_config *cfg,
-				  struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct imx327 *imx327 = to_imx327(sd);
 	struct v4l2_mbus_framefmt *framefmt;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&imx327->mutex);
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		framefmt = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 		fmt->format = *framefmt;
-		mutex_unlock(&imx327->mutex);
-		return -ENOTTY;
+		ret = -ENOTTY;
 	} else {
 		update_pad_format(imx327->cur_mode, fmt);
 	}
@@ -309,8 +312,8 @@ static int get_pad_format(struct v4l2_subdev *sd,
 }
 
 static int set_pad_format(struct v4l2_subdev *sd,
-		       struct v4l2_subdev_pad_config *cfg,
-		       struct v4l2_subdev_format *fmt)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *fmt)
 {
 	struct imx327 *imx327 = to_imx327(sd);
 	struct imx327_mode *mode;
@@ -341,18 +344,15 @@ static int set_pad_format(struct v4l2_subdev *sd,
 
 static void imx327_standby(struct imx327 *imx327)
 {
-	imx327_write_reg(imx327, 0x3000, REG_VALUE_08BIT, 0x01);/* STANDBY */
-	imx327_write_reg(imx327, 0x3002, REG_VALUE_08BIT, 0x01);/* XTMSTA */
-	printk("[imx327] standby\n");
+	imx327_write_reg(imx327, 0x3000, REG_VALUE_08BIT, 0x01);
+	imx327_write_reg(imx327, 0x3002, REG_VALUE_08BIT, 0x01);
 }
 
 static void imx327_restart(struct imx327 *imx327)
 {
-	imx327_write_reg(imx327, 0x3000, REG_VALUE_08BIT, 0x00);/* STANDBY */
-	imx327_write_reg(imx327, 0x3002, REG_VALUE_08BIT, 0x00);/* XTMSTA */
-
+	imx327_write_reg(imx327, 0x3000, REG_VALUE_08BIT, 0x00);
+	imx327_write_reg(imx327, 0x3002, REG_VALUE_08BIT, 0x00);
 	imx327_write_reg(imx327, 0x304b, REG_VALUE_08BIT, 0x0a);
-	printk("[imx327] restart\n");
 }
 
 /* Start streaming */
@@ -360,13 +360,12 @@ static int start_streaming(struct imx327 *imx327)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&imx327->sd);
 	const struct imx327_reg_list *reg_list;
+	const sns_sync_info_t *sync_info;
 	int ret;
 
 	if (imx327->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-		printk("[imx327] linear setting\n");
 		reg_list = &imx327->cur_mode->reg_list;
 	} else {//wdr
-		printk("[imx327] wdr setting\n");
 		reg_list = &imx327->cur_mode->wdr_reg_list;
 	}
 
@@ -376,22 +375,24 @@ static int start_streaming(struct imx327 *imx327)
 		return ret;
 	}
 
-	if (g_sns_sync_info.num_of_regs > 0) {
-		ret = imx327_write_regs(imx327, (struct imx327_reg *)g_sns_sync_info.regs,
-				g_sns_sync_info.num_of_regs);
+	sync_info = &imx327->cur_mode->imx327_sync_info;
+
+	if (sync_info->num_of_regs > 0) {
+		ret = imx327_write_regs(imx327, (struct imx327_reg *)sync_info->regs,
+					sync_info->num_of_regs);
 		if (ret) {
 			dev_err(&client->dev, "%s failed to set default\n", __func__);
 			return ret;
 		}
 	}
 
-	usleep_range(100 * 1000, 120 * 2000);
+	usleep_range(100 * 1000, 200 * 1000);
 	/* Apply customized values from user */
 	ret =  __v4l2_ctrl_handler_setup(imx327->sd.ctrl_handler);
 	if (ret)
 		return ret;
 
-	printk("[imx327] init reg done\n");
+	dev_info(&client->dev, "wdr_mode(%d) reg setting done\n", imx327->cur_mode->mipi_wdr_mode);
 
 	return ret;
 }
@@ -408,8 +409,6 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	struct imx327 *imx327 = to_imx327(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret = 0;
-
-	printk("[imx327] set stream(%d)\n", enable);
 
 	mutex_lock(&imx327->mutex);
 	if (imx327->streaming == enable) {
@@ -439,7 +438,7 @@ static int set_stream(struct v4l2_subdev *sd, int enable)
 	imx327->streaming = enable;
 	mutex_unlock(&imx327->mutex);
 
-	printk("[imx327] set stream success\n");
+	dev_info(&client->dev, "set stream(%d) success\n", enable);
 
 	return ret;
 
@@ -487,14 +486,13 @@ error:
 /* Verify chip ID */
 static int imx327_identify_module(struct imx327 *imx327)
 {
-	// struct i2c_client *client = v4l2_get_subdevdata(&imx327->sd);
 	struct i2c_client *client = v4l2_get_subdevdata(&imx327->sd);
 	int ret;
 	u32 val = 0;
 
 	ret = imx327_read_reg(imx327, IMX327_CHIP_ID_ADDR,
 			       REG_VALUE_08BIT, &val);
-	printk("[IMX327] read id:0x%x, ret:%d", val, ret);
+	dev_info(&client->dev, "read id:0x%x, ret:%d", val, ret);
 	if (ret)
 		return ret;
 
@@ -511,7 +509,9 @@ static void imx327_mirror_flip(struct imx327 *imx327, int orient)
 {
 	int val = 0;
 	int ori_addr = 0x3007;
-	printk("[imx327] set mirror_flip:%d", orient);
+
+	pr_info("set mirror_flip:%d", orient);
+
 	imx327_read_reg(imx327, ori_addr, REG_VALUE_08BIT, &val);
 	val = val & ~0x3;
 
@@ -548,7 +548,7 @@ static int imx327_update_link_menu(struct imx327 *imx327)
 
 	imx327_link_cif_menu[id][wdr_index] = imx327->cur_mode->mipi_wdr_mode;
 
-	printk("[imx327] update mipi_mode:%lld", imx327_link_cif_menu[id][wdr_index]);
+	dev_info(&client->dev, "update mipi_mode:%lld", imx327_link_cif_menu[id][wdr_index]);
 
 	ctrl_hdlr = imx327->sd.ctrl_handler;
 	v4l2_ctrl_handler_free(ctrl_hdlr);
@@ -561,11 +561,9 @@ static int imx327_update_link_menu(struct imx327 *imx327)
 	}
 
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&imx327_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					imx327_link_cif_menu[id][i], 0,
-					(const s64 * )imx327_link_cif_menu[id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx327_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      imx327_link_cif_menu[id][i], 0,
+					       (const s64 *)imx327_link_cif_menu[id]);
 
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
@@ -595,10 +593,11 @@ static long imx327_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_GET_TYPE:
 	{
 		int type = 0;
+
 		if (imx327->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
-			type = V4L2_SONY_IMX327_2L_MIPI_2M_30FPS_12BIT;
+			type = IMX327_SNS_TYPE_SDR;
 		} else {//wdr
-			type = V4L2_SONY_IMX327_2L_MIPI_2M_30FPS_12BIT_WDR2TO1;
+			type = IMX327_SNS_TYPE_WDR;
 		}
 		memcpy(arg, &type, sizeof(int));
 		break;
@@ -607,6 +606,7 @@ static long imx327_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_MIRROR_FLIP:
 	{
 		int orient = 0;
+
 		memcpy(&orient, arg, sizeof(int));
 		imx327_mirror_flip(imx327, orient);
 		break;
@@ -616,6 +616,7 @@ static long imx327_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		struct i2c_client *client = v4l2_get_subdevdata(&imx327->sd);
 		sns_i2c_info_t i2c_info;
+
 		i2c_info.i2c_addr =  client->addr;
 		i2c_info.i2c_idx  =  client->adapter->i2c_idx;
 		memcpy(arg, &i2c_info, sizeof(sns_i2c_info_t));
@@ -625,26 +626,26 @@ static long imx327_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_HDR_ON:
 	{
 		int hdr_on = 0;
+
 		memcpy(&hdr_on, arg, sizeof(int));
 
-		if (hdr_on) {
+		if (hdr_on)
 			imx327->cur_mode->mipi_wdr_mode = imx327_wdr_mode;
-		} else {
+		else
 			imx327->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
-		}
+
 		imx327_update_link_menu(imx327);
 		break;
 	}
 
 	case SNS_V4L2_SET_SNS_SYNC_INFO:
 	{
-		memcpy(&g_sns_sync_info, arg, sizeof(sns_sync_info_t));
+		memcpy(&imx327->cur_mode->imx327_sync_info, arg, sizeof(sns_sync_info_t));
 		break;
 	}
 
 	default:
 		ret = -ENOIOCTLCMD;
-		printk("[imx327] unknown ioctl cmd:%d", cmd);
 		break;
 	}
 
@@ -657,7 +658,6 @@ static long imx327_compat_ioctl32(struct v4l2_subdev *sd,
 {
 	void __user *up = compat_ptr(arg);
 	long ret;
-	printk("[imx327] compat ioctl cmd:%d", cmd);
 
 	switch (cmd) {
 	default:
@@ -723,15 +723,13 @@ static int imx327_init_controls(struct imx327 *imx327, int index_id)
 	mutex_init(&imx327->mutex);
 	ctrl_hdlr->lock = &imx327->mutex;
 	for (i = 0; i < SNS_CFG_TYPE_MAX; i++) {
-		if (SNS_CFG_TYPE_WDR_MODE == i) {
+		if (i == SNS_CFG_TYPE_WDR_MODE)
 			imx327->cur_mode->mipi_wdr_mode = imx327_link_cif_menu[index_id][i];
-		}
 
-		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr,
-					&imx327_ctrl_ops,
-					V4L2_CID_LINK_FREQ,
-					imx327_link_cif_menu[index_id][i], 0,
-					(const s64 * )imx327_link_cif_menu[index_id]);
+		ctrl = v4l2_ctrl_new_int_menu(ctrl_hdlr, &imx327_ctrl_ops, V4L2_CID_LINK_FREQ,
+					      imx327_link_cif_menu[index_id][i], 0,
+					       (const s64 *)imx327_link_cif_menu[index_id]);
+
 		if (ctrl)
 			ctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 	}
@@ -780,35 +778,30 @@ static int imx327_probe(struct i2c_client *client,
 	int bus_id;
 	int ret = -1;
 	int i;
-	memset(&g_sns_sync_info, 0, sizeof(g_sns_sync_info));
 
-	printk("[imx327] probe id[%d] start\n", imx327_probe_index);
+	dev_info(dev, "probe id[%d] start\n", imx327_probe_index);
 
 	imx327_probe_index++;
 
 	if (index_id >= MAX_SENSOR_DEVICE || index_id < 0) {
-		printk("[imx327] invalid devid(%d)\n", index_id);
+		dev_info(dev, "invalid devid(%d)\n", index_id);
 		return ret;
 	}
 
 	imx327 = devm_kzalloc(&client->dev, sizeof(*imx327), GFP_KERNEL);
-	if (!imx327) {
-		dev_err(dev, "Failed to alloc devmem!\n");
+	if (!imx327)
 		return -ENOMEM;
-	}
 
 	sd = &imx327->sd;
 
 	for (i = 0; i < addr_num; i++) {
-		if (force_bus[index_id] < 0) {
+		if (force_bus[index_id] < 0)
 			bus_id = imx327_bus_map[index_id];
-		} else {
+		else
 			bus_id = force_bus[index_id];
-		}
 
-		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM) {
+		if (bus_id < 0 || bus_id > MAX_I2C_BUS_NUM)
 			return ret;
-		}
 
 		client->addr = imx327_i2c_list[i];
 		client->adapter = i2c_get_adapter(bus_id);
@@ -818,16 +811,16 @@ static int imx327_probe(struct i2c_client *client,
 		/* Check module identity */
 		ret = imx327_identify_module(imx327);
 		if (ret) {
-			printk("id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
-				index_id, bus_id, i, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[%d][0x%x] no sensor found\n",
+				 index_id, bus_id, i, client->addr);
 
-			if (i == addr_num - 1) {
+			if (i == addr_num - 1)
 				return ret;
-			}
-			continue;;
+
+			continue;
 		} else {
-			printk("id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
-				index_id, bus_id, client->addr);
+			dev_info(dev, "id[%d] bus[%d] i2c_addr[0x%x] sensor found\n",
+				 index_id, bus_id, client->addr);
 			break;
 		}
 	}
@@ -836,25 +829,21 @@ static int imx327_probe(struct i2c_client *client,
 
 	if (index_id >= ARRAY_SIZE(supported_modes)) {
 		imx327->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct imx327_mode), GFP_KERNEL);
-
-		memcpy(imx327->cur_mode, &supported_modes[0],
-					sizeof(struct imx327_mode));
+						sizeof(struct imx327_mode), GFP_KERNEL);
+		memcpy(imx327->cur_mode, &supported_modes[0], sizeof(struct imx327_mode));
 	} else {
 		imx327->cur_mode = devm_kzalloc(&client->dev,
-					sizeof(struct imx327_mode), GFP_KERNEL);
-
-		memcpy(imx327->cur_mode, &supported_modes[index_id],
-					sizeof(struct imx327_mode));
+						sizeof(struct imx327_mode), GFP_KERNEL);
+		memcpy(imx327->cur_mode, &supported_modes[index_id], sizeof(struct imx327_mode));
 	}
 
+	memset(&imx327->cur_mode->imx327_sync_info, 0, sizeof(sns_sync_info_t));
 
 	mutex_init(&imx327->mutex);
 
 	ret = imx327_init_controls(imx327, index_id);
-	if (ret) {
+	if (ret)
 		return ret;
-	}
 
 	/* Initialize subdev */
 	sd->internal_ops = &imx327_internal_ops;
@@ -887,7 +876,7 @@ static int imx327_probe(struct i2c_client *client,
 	pm_runtime_enable(&client->dev);
 	pm_runtime_idle(&client->dev);
 
-	printk("[imx327] sensor_%d probe success\n", index_id);
+	dev_info(dev, "sensor_%d probe success\n", index_id);
 
 	return 0;
 
@@ -945,7 +934,8 @@ static struct i2c_driver imx327_i2c_driver = {
 
 static int __init sensor_mod_init(void)
 {
-	printk("== imx327 mod add ==\n");
+	pr_info("== imx327 mod add ==\n");
+
 	return i2c_add_driver(&imx327_i2c_driver);
 }
 

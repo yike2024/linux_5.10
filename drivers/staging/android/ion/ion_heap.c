@@ -52,7 +52,7 @@ void *ion_heap_map_kernel(struct ion_heap *heap,
 
 #else
 
-	pr_debug("ion_heap_map_kernel addr=0x%llx, size=%lu\n", buffer->paddr, PAGE_ALIGN(buffer->size));
+	pr_debug("%s addr=0x%llx, size=%lu\n", __func__, buffer->paddr, PAGE_ALIGN(buffer->size));
 
 	if (buffer->flags & ION_FLAG_CACHED)
 		vaddr = memremap(buffer->paddr, PAGE_ALIGN(buffer->size), MEMREMAP_WB);
@@ -60,7 +60,7 @@ void *ion_heap_map_kernel(struct ion_heap *heap,
 		vaddr = ioremap(buffer->paddr, PAGE_ALIGN(buffer->size));
 
 	if (!vaddr) {
-		pr_err("ion_heap_map_kernel map failed\n");
+		pr_err("%s map failed\n", __func__);
 		return ERR_PTR(-ENOMEM);
 	}
 

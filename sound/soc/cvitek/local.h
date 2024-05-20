@@ -228,6 +228,64 @@ struct cvi_i2s_reg_context {
 	u32 i2c_clk_ctl1;
 	u32 i2s_pcm_synth;
 };
+
+struct cvi_dwi2s_reg_context {
+//master:0x029178000, slave:0x029178400
+	u32 i2s_dwapb_ier;  /* 0x000	Enable Register */
+	u32 i2s_dwapb_irer; /* 0x004	I2S Receiver Block Enable Registe */
+	u32 i2s_dwapb_iter; /* 0x008	I2S Transmitter Block Enable Register */
+	u32 i2s_dwapb_cer;  /* 0x00C	Clock Enable Register [only master] */
+	u32 i2s_dwapb_ccr;  /* 0x010	Clock Configuration Register [first CER[0] = 0] */
+	u32 i2s_dwapb_rxffr;/* 0x014	Receiver Block FIFO Reset Register [first IRER[0] = 0] */
+	u32 i2s_dwapb_txffr;/* 0x018	Transmitter Block FIFO Reset Register [first ITER[0] = 0] */
+	//u32 dummy1[1];
+	// u32 i2s_dwapb_lrbr0_lthr0;/* 0x020	Left Receive Buffer Register x /Left Transmit Holding Register x */
+	// u32 i2s_dwapb_rrbr0_rthr0;/* 0x024	Right Receive Buffer Register x/Right Transmit Holding Register x */
+	u32 i2s_dwapb_rer0; /* 0x028	Receive Enable Register x */
+	u32 i2s_dwapb_ter0; /* 0x02c	Transmit Enable Register x */
+	u32 i2s_dwapb_rcr0; /* 0x030	Receive Configuration Register x  data len  [first RER0[0] = 0] */
+	u32 i2s_dwapb_tcr0; /* 0x034	Transmit Configuration Register x data len [first TER0[0] = 0] */
+
+	// u32 i2s_dwapb_isr0; /* 0x038	Interrupt status Register x read only */
+	// u32 i2s_dwapb_imr0; /* 0x03c	Interrupt Mask Register x   read only */
+	// u32 i2s_dwapb_ror0; /* 0x040	Receive Overrun Register x  read only */
+	// u32 i2s_dwapb_tor0; /* 0x044 Transmit Overrun Register x read only */
+
+	u32 i2s_dwapb_rfcr0; /* 0x048	Receive FIFO Cfg reg x fifo intr and dma req [first RER0[0] = 0] */
+	u32 i2s_dwapb_tfcr0; /* 0x04c	Transmit FIFO Configuration Register x [first TER0[0] = 0] */
+	u32 i2s_dwapb_rff0;  /* 0x050	Receive FIFO Flush Register x [first RER0[0] = 0] */
+	u32 i2s_dwapb_tff0;  /* 0x054	Transmit FIFO Flush Register x [first TER0[0] = 0] */
+	//u32 dummy2[2];
+	// u32 i2s_dwapb_lrbr1_lthr1; /* 0x060	Left Receive Buffer Register x /Left Transmit Holding Register x */
+	// u32 i2s_dwapb_rrbr1_rthr1; /* 0x064	Right Receive Buffer Register x/Right Transmit Holding Register x */
+
+	u32 i2s_dwapb_rer1; /* 0x068	Receive Enable Register x */
+	u32 i2s_dwapb_ter1; /* 0x06c	Transmit Enable Register x */
+	u32 i2s_dwapb_rcr1; /* 0x070	Receive Configuration Register x  data len */
+	u32 i2s_dwapb_tcr1; /* 0x074	Transmit Configuration Register x data len */
+
+	// u32 i2s_dwapb_isr1; /* 0x078	Interrupt status Register x read only */
+	// u32 i2s_dwapb_imr1; /* 0x07c	Interrupt Mask Register x   read only */
+	// u32 i2s_dwapb_ror1; /* 0x080	Receive Overrun Register x  read only */
+	// u32 i2s_dwapb_tor1; /* 0x084 Transmit Overrun Register x read only */
+
+	u32 i2s_dwapb_rfcr1; /* 0x088	Receive FIFO Configuration Register x fifo intr and dma req */
+	u32 i2s_dwapb_tfcr1; /* 0x08c	Transmit FIFO Configuration Register x */
+	u32 i2s_dwapb_rff1;  /* 0x090	Receive FIFO Flush Register x */
+	u32 i2s_dwapb_tff1;  /* 0x094	Transmit FIFO Flush Register x */
+	//u32 dummy3[74];
+	u32 i2s_dwapb_rxdma;  /* 0x1c0	Receiver Block DMA Register. read only */
+	u32 i2s_dwapb_rrxdma; /* 0x1c4	Reset Receiver Block DMA Register. */
+	u32 i2s_dwapb_txdma;  /* 0x1c8	Transmitter Block DMA Register read only */
+	u32 i2s_dwapb_rtxdma; /* 0x1cc	Reset Transmitter Block DMA Register */
+	//u32 dummy4[8];
+	u32 i2s_dwapb_i2scomp_param2;	/* 0x1f0	Component Parameter Register 2 read only */
+	u32 i2s_dwapb_i2scomp_param1;	/* 0x1f4	Component Parameter Register 1 read only */
+	u32 i2s_dwapb_i2scomp_version;	/* 0x1f0	I2S Component Version Register read only */
+	u32 i2s_dwapb_i2scomp_type;		/* 0x1fc	I2S Component Type Register read only */
+	u32 i2s_dwapb_dmacr;			/* 0x200	DMA Control Register only [I2S_HAS_DMA_INTERFACE = 1] */
+};
+
 #endif
 
 struct cvi_i2s_dev {
@@ -258,6 +316,7 @@ struct cvi_i2s_dev {
 	bool mclk_out;
 #ifdef CONFIG_PM_SLEEP
 	struct cvi_i2s_reg_context *reg_ctx;
+	struct cvi_dwi2s_reg_contex *reg_dwctx;
 #endif
 };
 

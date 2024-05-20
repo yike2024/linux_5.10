@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef __CV_DMA_H__
 #define __CV_DMA_H__
 
@@ -462,7 +463,7 @@ struct dw_dma {
 #ifdef writeq
 #define dma_writeq_native	writeq
 #else
-#define dma_writeq_native(__value,__reg)	\
+#define dma_writeq_native(__value, __reg)	\
 	(*(volatile u64 __force *)(__reg) = (__value))
 #endif
 #endif
