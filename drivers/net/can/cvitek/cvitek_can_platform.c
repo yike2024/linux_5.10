@@ -14,9 +14,7 @@
 //            Unauthorized use, disclosure, duplication, or reproduction are prohibited.
 
 #include <linux/platform_device.h>
-
 #include "cvitek_can.h"
-
 extern int sdvt_can_set_mode(struct net_device *dev, enum can_mode mode);
 struct sdvt_can_plat_priv {
 	void __iomem *base;
@@ -53,7 +51,9 @@ static int sdvt_can_plat_probe(struct platform_device *pdev)
 	struct sdvt_can_plat_priv *priv;
 	struct resource *res;
 	void __iomem *addr;
+	void __iomem *sd1_d1_pinmux_addr;
 	int irq, ret = 0;
+	const char *label;
 
 	sdvt_can_class = sdvt_can_class_allocate_dev(&pdev->dev);
 	if (!sdvt_can_class)
@@ -80,6 +80,22 @@ static int sdvt_can_plat_probe(struct platform_device *pdev)
 	}
 
 	priv->base = addr;
+
+	label = of_get_property(pdev->dev.of_node, "label", NULL);
+	if (label) {
+		dev_info(&pdev->dev, "label: %s\n", label);
+		if (strcmp(label, "SE9") == 0) {
+			sd1_d1_pinmux_addr = devm_ioremap(&pdev->dev, SD1_D1_PINMUX, 4);
+			if (IS_ERR(sd1_d1_pinmux_addr)) {
+				dev_err(&pdev->dev, "Failed to map register address\n");
+				goto probe_fail;
+			}
+			writel(readl(sd1_d1_pinmux_addr) & ~0xf, sd1_d1_pinmux_addr);
+			writel(readl(sd1_d1_pinmux_addr) | PULL_DOWN_EN, sd1_d1_pinmux_addr);
+		}
+	} else {
+		dev_info(&pdev->dev, "label: none\n");
+	}
 
 	sdvt_can_class->net->irq = irq;
 	sdvt_can_class->pm_clock_support = 1;

@@ -28,6 +28,8 @@
 #include <linux/can/dev.h>
 #include <linux/pinctrl/consumer.h>
 
+#define SD1_D1_PINMUX 0x28104b40
+#define PULL_DOWN_EN 0x8
 struct sdvt_can_classdev;
 struct sdvt_can_command;
 struct sdvt_can_config;
