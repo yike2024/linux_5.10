@@ -87,24 +87,29 @@
  */
 enum v4l2_field {
 	V4L2_FIELD_ANY           = 0, /* driver can choose from none,
-					 top, bottom, interlaced
-					 depending on whatever it thinks
-					 is approximate ... */
+				       * top, bottom, interlaced
+				       * depending on whatever it thinks
+				       * is approximate ...
+				       */
 	V4L2_FIELD_NONE          = 1, /* this device has no fields ... */
 	V4L2_FIELD_TOP           = 2, /* top field only */
 	V4L2_FIELD_BOTTOM        = 3, /* bottom field only */
 	V4L2_FIELD_INTERLACED    = 4, /* both fields interlaced */
 	V4L2_FIELD_SEQ_TB        = 5, /* both fields sequential into one
-					 buffer, top-bottom order */
+				       * buffer, top-bottom order
+				       */
 	V4L2_FIELD_SEQ_BT        = 6, /* same as above + bottom-top order */
 	V4L2_FIELD_ALTERNATE     = 7, /* both fields alternating into
-					 separate buffers */
+				       * separate buffers
+				       */
 	V4L2_FIELD_INTERLACED_TB = 8, /* both fields interlaced, top field
-					 first and the top field is
-					 transmitted first */
+				       * first and the top field is
+				       * transmitted first
+				       */
 	V4L2_FIELD_INTERLACED_BT = 9, /* both fields interlaced, top field
-					 first and the bottom field is
-					 transmitted first */
+				       * first and the bottom field is
+				       * transmitted first
+				       */
 };
 #define V4L2_FIELD_HAS_TOP(field)	\
 	((field) == V4L2_FIELD_TOP	||\
@@ -429,16 +434,16 @@ struct v4l2_area {
 };
 
 /**
-  * struct v4l2_capability - Describes V4L2 device caps returned by VIDIOC_QUERYCAP
-  *
-  * @driver:	   name of the driver module (e.g. "bttv")
-  * @card:	   name of the card (e.g. "Hauppauge WinTV")
-  * @bus_info:	   name of the bus (e.g. "PCI:" + pci_name(pci_dev) )
-  * @version:	   KERNEL_VERSION
-  * @capabilities: capabilities of the physical device as a whole
-  * @device_caps:  capabilities accessed via this particular device (node)
-  * @reserved:	   reserved fields for future extensions
-  */
+ * struct v4l2_capability - Describes V4L2 device caps returned by VIDIOC_QUERYCAP
+ *
+ * @driver:	   name of the driver module (e.g. "bttv")
+ * @card:	   name of the card (e.g. "Hauppauge WinTV")
+ * @bus_info:	   name of the bus (e.g. "PCI:" + pci_name(pci_dev) )
+ * @version:	   KERNEL_VERSION
+ * @capabilities: capabilities of the physical device as a whole
+ * @device_caps:  capabilities accessed via this particular device (node)
+ * @reserved:	   reserved fields for future extensions
+ */
 struct v4l2_capability {
 	__u8	driver[16];
 	__u8	card[32];
@@ -900,7 +905,8 @@ struct v4l2_jpegcompression {
 	int quality;
 
 	int  APPn;              /* Number of APP segment to be written,
-				 * must be 0..15 */
+				 * must be 0..15
+				 */
 	int  APP_len;           /* Length of data in JPEG APPn segment */
 	char APP_data[60];      /* Data in the JPEG APPn segment. */
 
@@ -915,14 +921,16 @@ struct v4l2_jpegcompression {
 				 * be fewer applications which can read it.
 				 * The presence of the APP and COM marker
 				 * is influenced by APP_len and COM_len
-				 * ONLY, not by this property! */
+				 * ONLY, not by this property!
+				 */
 
 #define V4L2_JPEG_MARKER_DHT (1<<3)    /* Define Huffman Tables */
 #define V4L2_JPEG_MARKER_DQT (1<<4)    /* Define Quantization Tables */
 #define V4L2_JPEG_MARKER_DRI (1<<5)    /* Define Restart Interval */
 #define V4L2_JPEG_MARKER_COM (1<<6)    /* Comment segment */
 #define V4L2_JPEG_MARKER_APP (1<<7)    /* App segment, driver will
-					* always use APP0 */
+					* always use APP0
+					*/
 };
 
 /*
@@ -1149,7 +1157,8 @@ struct v4l2_framebuffer {
 	__u32			capability;
 	__u32			flags;
 /* FIXME: in theory we should pass something like PCI device + memory
- * region + offset instead of some physical address */
+ * region + offset instead of some physical address
+ */
 	void                    *base;
 	struct {
 		__u32		width;
@@ -1301,12 +1310,12 @@ typedef __u64 v4l2_std_id;
 #define V4L2_STD_ATSC_16_VSB    ((v4l2_std_id)0x02000000)
 
 /* FIXME:
-   Although std_id is 64 bits, there is an issue on PPC32 architecture that
-   makes switch(__u64) to break. So, there's a hack on v4l2-common.c rounding
-   this value to 32 bits.
-   As, currently, the max value is for V4L2_STD_ATSC_16_VSB (30 bits wide),
-   it should work fine. However, if needed to add more than two standards,
-   v4l2-common.c should be fixed.
+ * Although std_id is 64 bits, there is an issue on PPC32 architecture that
+ * makes switch(__u64) to break. So, there's a hack on v4l2-common.c rounding
+ * this value to 32 bits.
+ * As, currently, the max value is for V4L2_STD_ATSC_16_VSB (30 bits wide),
+ * it should work fine. However, if needed to add more than two standards,
+ * v4l2-common.c should be fixed.
  */
 
 /*
@@ -2056,7 +2065,8 @@ struct v4l2_encoder_cmd {
 #define V4L2_DEC_START_FMT_GOP		(1)
 
 /* The structure must be zeroed before use by the application
-   This ensures it can be extended safely in the future. */
+ * This ensures it can be extended safely in the future.
+ */
 struct v4l2_decoder_cmd {
 	__u32 cmd;
 	__u32 flags;
@@ -2067,10 +2077,11 @@ struct v4l2_decoder_cmd {
 
 		struct {
 			/* 0 or 1000 specifies normal speed,
-			   1 specifies forward single stepping,
-			   -1 specifies backward single stepping,
-			   >1: playback at speed/1000 of the normal speed,
-			   <-1: reverse playback at (-speed/1000) of the normal speed. */
+			 * 1 specifies forward single stepping,
+			 * -1 specifies backward single stepping,
+			 * >1: playback at speed/1000 of the normal speed,
+			 * <-1: reverse playback at (-speed/1000) of the normal speed.
+			 */
 			__s32 speed;
 			__u32 format;
 		} start;
@@ -2121,16 +2132,18 @@ struct v4l2_vbi_format {
 struct v4l2_sliced_vbi_format {
 	__u16   service_set;
 	/* service_lines[0][...] specifies lines 0-23 (1-23 used) of the first field
-	   service_lines[1][...] specifies lines 0-23 (1-23 used) of the second field
-				 (equals frame lines 313-336 for 625 line video
-				  standards, 263-286 for 525 line standards) */
+	 * service_lines[1][...] specifies lines 0-23 (1-23 used) of the second field
+	 *			 (equals frame lines 313-336 for 625 line video
+	 *			  standards, 263-286 for 525 line standards)
+	 */
 	__u16   service_lines[2][24];
 	__u32   io_size;
 	__u32   reserved[2];            /* must be zero */
 };
 
 /* Teletext World System Teletext
-   (WST), defined on ITU-R BT.653-2 */
+ * (WST), defined on ITU-R BT.653-2
+ */
 #define V4L2_SLICED_TELETEXT_B          (0x0001)
 /* Video Program System, defined on ETS 300 231*/
 #define V4L2_SLICED_VPS                 (0x0400)
@@ -2145,9 +2158,10 @@ struct v4l2_sliced_vbi_format {
 struct v4l2_sliced_vbi_cap {
 	__u16   service_set;
 	/* service_lines[0][...] specifies lines 0-23 (1-23 used) of the first field
-	   service_lines[1][...] specifies lines 0-23 (1-23 used) of the second field
-				 (equals frame lines 313-336 for 625 line video
-				  standards, 263-286 for 525 line standards) */
+	 * service_lines[1][...] specifies lines 0-23 (1-23 used) of the second field
+	 *			 (equals frame lines 313-336 for 625 line video
+	 *			  standards, 263-286 for 525 line standards)
+	 */
 	__u16   service_lines[2][24];
 	__u32	type;		/* enum v4l2_buf_type */
 	__u32   reserved[3];    /* must be 0 */
@@ -2572,7 +2586,8 @@ struct v4l2_create_buffers {
 #define VIDIOC_QUERY_EXT_CTRL	_IOWR('V', 103, struct v4l2_query_ext_ctrl)
 
 /* Reminder: when adding new ioctls please add support for them to
-   drivers/media/v4l2-core/v4l2-compat-ioctl32.c as well! */
+ * drivers/media/v4l2-core/v4l2-compat-ioctl32.c as well!
+ */
 
 #define BASE_VIDIOC_PRIVATE	192		/* 192-255 are private */
 

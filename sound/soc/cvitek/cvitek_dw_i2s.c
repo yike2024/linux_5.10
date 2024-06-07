@@ -1082,7 +1082,7 @@ static struct platform_driver cvi_dw_i2s_driver = {
 
 module_platform_driver(cvi_dw_i2s_driver);
 
-MODULE_AUTHOR("rachel <ethan.chen@wisecore.com.tw>");
+MODULE_AUTHOR("<ethan.chen@wisecore.com.tw>");
 MODULE_DESCRIPTION("CVITEK DW I2S SoC Interface");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:CVITEK_DW_I2S");

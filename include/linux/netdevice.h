@@ -105,7 +105,8 @@ void netdev_set_default_ethtool_ops(struct net_device *dev,
 
 /* NET_XMIT_CN is special. It does not guarantee that this packet is lost. It
  * indicates that the device will soon be dropping packets, or already drops
- * some packets of the same priority; prompting us to send less aggressively. */
+ * some packets of the same priority; prompting us to send less aggressively.
+ */
 #define net_xmit_eval(e)	((e) == NET_XMIT_CN ? 0 : (e))
 #define net_xmit_errno(e)	((e) != NET_XMIT_CN ? -ENOBUFS : 0)
 
@@ -155,7 +156,7 @@ static inline bool dev_xmit_complete(int rc)
 #endif
 
 #if !IS_ENABLED(CONFIG_NET_IPIP) && !IS_ENABLED(CONFIG_NET_IPGRE) && \
-    !IS_ENABLED(CONFIG_IPV6_SIT) && !IS_ENABLED(CONFIG_IPV6_TUNNEL)
+	!IS_ENABLED(CONFIG_IPV6_SIT) && !IS_ENABLED(CONFIG_IPV6_TUNNEL)
 #define MAX_HEADER LL_MAX_HEADER
 #else
 #define MAX_HEADER (LL_MAX_HEADER + 48)
@@ -264,11 +265,11 @@ struct hh_cache {
  */
 #define LL_RESERVED_SPACE(dev) \
 	((((dev)->hard_header_len+(dev)->needed_headroom)&~(HH_DATA_MOD - 1)) + HH_DATA_MOD)
-#define LL_RESERVED_SPACE_EXTRA(dev,extra) \
+#define LL_RESERVED_SPACE_EXTRA(dev, extra) \
 	((((dev)->hard_header_len+(dev)->needed_headroom+(extra))&~(HH_DATA_MOD - 1)) + HH_DATA_MOD)
 
 struct header_ops {
-	int	(*create) (struct sk_buff *skb, struct net_device *dev,
+	int	(*create)(struct sk_buff *skb, struct net_device *dev,
 			   unsigned short type, const void *daddr,
 			   const void *saddr, unsigned int len);
 	int	(*parse)(const struct sk_buff *skb, unsigned char *haddr);
@@ -687,7 +688,7 @@ struct rps_dev_flow_table {
 	struct rps_dev_flow flows[];
 };
 #define RPS_DEV_FLOW_TABLE_SIZE(_num) (sizeof(struct rps_dev_flow_table) + \
-    ((_num) * sizeof(struct rps_dev_flow)))
+	((_num) * sizeof(struct rps_dev_flow)))
 
 /*
  * The rps_sock_flow_table contains mappings of flows to the last CPU
@@ -769,7 +770,7 @@ struct xps_map {
 };
 #define XPS_MAP_SIZE(_num) (sizeof(struct xps_map) + ((_num) * sizeof(u16)))
 #define XPS_MIN_MAP_ALLOC ((L1_CACHE_ALIGN(offsetof(struct xps_map, queues[1])) \
-       - sizeof(struct xps_map)) / sizeof(u16))
+	- sizeof(struct xps_map)) / sizeof(u16))
 
 /*
  * This structure holds all XPS maps for device.  Maps are indexed by CPU.
@@ -918,12 +919,12 @@ struct netdev_bpf {
 
 #ifdef CONFIG_XFRM_OFFLOAD
 struct xfrmdev_ops {
-	int	(*xdo_dev_state_add) (struct xfrm_state *x);
-	void	(*xdo_dev_state_delete) (struct xfrm_state *x);
-	void	(*xdo_dev_state_free) (struct xfrm_state *x);
-	bool	(*xdo_dev_offload_ok) (struct sk_buff *skb,
+	int	(*xdo_dev_state_add)(struct xfrm_state *x);
+	void	(*xdo_dev_state_delete)(struct xfrm_state *x);
+	void	(*xdo_dev_state_free)(struct xfrm_state *x);
+	bool	(*xdo_dev_offload_ok)(struct sk_buff *skb,
 				       struct xfrm_state *x);
-	void	(*xdo_dev_state_advance_esn) (struct xfrm_state *x);
+	void	(*xdo_dev_state_advance_esn)(struct xfrm_state *x);
 };
 #endif
 
@@ -1300,14 +1301,14 @@ struct net_device_ops {
 						       void *addr);
 	int			(*ndo_validate_addr)(struct net_device *dev);
 	int			(*ndo_do_ioctl)(struct net_device *dev,
-					        struct ifreq *ifr, int cmd);
+						struct ifreq *ifr, int cmd);
 	int			(*ndo_set_config)(struct net_device *dev,
-					          struct ifmap *map);
+						  struct ifmap *map);
 	int			(*ndo_change_mtu)(struct net_device *dev,
 						  int new_mtu);
 	int			(*ndo_neigh_setup)(struct net_device *dev,
 						   struct neigh_parms *);
-	void			(*ndo_tx_timeout) (struct net_device *dev,
+	void			(*ndo_tx_timeout)(struct net_device *dev,
 						   unsigned int txqueue);
 
 	void			(*ndo_get_stats64)(struct net_device *dev,
@@ -1321,7 +1322,7 @@ struct net_device_ops {
 	int			(*ndo_vlan_rx_add_vid)(struct net_device *dev,
 						       __be16 proto, u16 vid);
 	int			(*ndo_vlan_rx_kill_vid)(struct net_device *dev,
-						        __be16 proto, u16 vid);
+							__be16 proto, u16 vid);
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	void                    (*ndo_poll_controller)(struct net_device *dev);
 	int			(*ndo_netpoll_setup)(struct net_device *dev,
@@ -1697,16 +1698,16 @@ enum netdev_priv_flags {
  *
  *	interface address info:
  *
- * 	@perm_addr:		Permanent hw address
- * 	@addr_assign_type:	Hw address assignment type
- * 	@addr_len:		Hardware address length
+ *	@perm_addr:		Permanent hw address
+ *	@addr_assign_type:	Hw address assignment type
+ *	@addr_len:		Hardware address length
  *	@upper_level:		Maximum depth level of upper devices.
  *	@lower_level:		Maximum depth level of lower devices.
  *	@neigh_priv_len:	Used in neigh_alloc()
- * 	@dev_id:		Used to differentiate devices that share
- * 				the same link layer address
- * 	@dev_port:		Used to differentiate devices that share
- * 				the same function
+ *	@dev_id:		Used to differentiate devices that share
+ *				the same link layer address
+ *	@dev_port:		Used to differentiate devices that share
+ *				the same function
  *	@addr_list_lock:	XXX: need comments on this one
  *	@name_assign_type:	network interface name assignment type
  *	@uc_promisc:		Counter that indicates promiscuous mode
@@ -1741,14 +1742,14 @@ enum netdev_priv_flags {
  *	@_rx:			Array of RX queues
  *	@num_rx_queues:		Number of RX queues
  *				allocated at register_netdev() time
- *	@real_num_rx_queues: 	Number of RX queues currently active in device
+ *	@real_num_rx_queues:	Number of RX queues currently active in device
  *	@xdp_prog:		XDP sockets filter program pointer
  *	@gro_flush_timeout:	timeout for GRO layer in NAPI
  *	@napi_defer_hard_irqs:	If not zero, provides a counter that would
  *				allow to avoid NIC hard IRQ, on busy queues.
  *
  *	@rx_handler:		handler for received packets
- *	@rx_handler_data: 	XXX: need comments on this one
+ *	@rx_handler_data:	XXX: need comments on this one
  *	@miniq_ingress:		ingress/clsact qdisc specific data for
  *				ingress processing
  *	@ingress_queue:		XXX: need comments on this one
@@ -1763,10 +1764,10 @@ enum netdev_priv_flags {
  *
  *	@_tx:			Array of TX queues
  *	@num_tx_queues:		Number of TX queues allocated at alloc_netdev_mq() time
- *	@real_num_tx_queues: 	Number of TX queues currently active in device
+ *	@real_num_tx_queues:	Number of TX queues currently active in device
  *	@qdisc:			Root qdisc from userspace point of view
  *	@tx_queue_len:		Max frames per queue allowed
- *	@tx_global_lock: 	XXX: need comments on this one
+ *	@tx_global_lock:	XXX: need comments on this one
  *	@xdp_bulkq:		XDP device bulk queue
  *	@xps_cpus_map:		all CPUs map for XPS device
  *	@xps_rxqs_map:		all RXQs map for XPS device
@@ -1792,13 +1793,13 @@ enum netdev_priv_flags {
  *	@needs_free_netdev:	Should unregister perform free_netdev?
  *	@priv_destructor:	Called from unregister
  *	@npinfo:		XXX: need comments on this one
- * 	@nd_net:		Network namespace this network device is inside
+ *	@nd_net:		Network namespace this network device is inside
  *
- * 	@ml_priv:	Mid-layer private
- * 	@lstats:	Loopback statistics
- * 	@tstats:	Tunnel statistics
- * 	@dstats:	Dummy statistics
- * 	@vstats:	Virtual ethernet statistics
+ *	@ml_priv:	Mid-layer private
+ *	@lstats:	Loopback statistics
+ *	@tstats:	Tunnel statistics
+ *	@dstats:	Dummy statistics
+ *	@vstats:	Virtual ethernet statistics
  *
  *	@garp_port:	GARP
  *	@mrp_port:	MRP
@@ -2002,7 +2003,7 @@ struct net_device {
 	struct tipc_bearer __rcu *tipc_ptr;
 #endif
 #if IS_ENABLED(CONFIG_IRDA) || IS_ENABLED(CONFIG_ATALK)
-	void 			*atalk_ptr;
+	void			*atalk_ptr;
 #endif
 	struct in_device __rcu	*ip_ptr;
 #if IS_ENABLED(CONFIG_DECNET)
@@ -2069,7 +2070,7 @@ struct net_device {
 #endif
 
 #ifdef CONFIG_NET_SCHED
-	DECLARE_HASHTABLE	(qdisc_hash, 4);
+	DECLARE_HASHTABLE(qdisc_hash, 4);
 #endif
 	/* These may be needed for future network-power-down code. */
 	struct timer_list	watchdog_timer;
@@ -2082,7 +2083,7 @@ struct net_device {
 
 	struct list_head	link_watch_list;
 
-	enum { NETREG_UNINITIALIZED=0,
+	enum { NETREG_UNINITIALIZED = 0,
 	       NETREG_REGISTERED,	/* completed register_netdevice */
 	       NETREG_UNREGISTERING,	/* called unregister_netdevice */
 	       NETREG_UNREGISTERED,	/* completed unregister todo */
@@ -2281,7 +2282,7 @@ struct netdev_queue *netdev_core_pick_tx(struct net_device *dev,
 /* returns the headroom that the master device needs to take in account
  * when forwarding to this dev
  */
-static inline unsigned netdev_get_fwd_headroom(struct net_device *dev)
+static inline unsigned int netdev_get_fwd_headroom(struct net_device *dev)
 {
 	return dev->priv_flags & IFF_PHONY_HEADROOM ? 0 : dev->needed_headroom;
 }
@@ -2502,11 +2503,11 @@ struct packet_type {
 	__be16			type;	/* This is really htons(ether_type). */
 	bool			ignore_outgoing;
 	struct net_device	*dev;	/* NULL is wildcarded here	     */
-	int			(*func) (struct sk_buff *,
+	int			(*func)(struct sk_buff *,
 					 struct net_device *,
 					 struct packet_type *,
 					 struct net_device *);
-	void			(*list_func) (struct list_head *,
+	void			(*list_func)(struct list_head *,
 					      struct packet_type *,
 					      struct net_device *);
 	bool			(*id_match)(struct packet_type *ptype,
@@ -2623,9 +2624,10 @@ enum netdev_cmd {
 	NETDEV_UP	= 1,	/* For now you can't veto a device up/down */
 	NETDEV_DOWN,
 	NETDEV_REBOOT,		/* Tell a protocol stack a network interface
-				   detected a hardware crash and restarted
-				   - we can use this eg to kick tcp sessions
-				   once done */
+				 * detected a hardware crash and restarted
+				 * - we can use this eg to kick tcp sessions
+				 * once done
+				 */
 	NETDEV_CHANGE,		/* Notify device state change */
 	NETDEV_REGISTER,
 	NETDEV_UNREGISTER,
@@ -2997,7 +2999,7 @@ static inline void __skb_gro_checksum_convert(struct sk_buff *skb,
 #define skb_gro_checksum_try_convert(skb, proto, compute_pseudo)	\
 do {									\
 	if (__skb_gro_checksum_convert_check(skb))			\
-		__skb_gro_checksum_convert(skb, 			\
+		__skb_gro_checksum_convert(skb,				\
 					   compute_pseudo(skb, proto));	\
 } while (0)
 
@@ -3154,7 +3156,7 @@ static inline bool dev_has_header(const struct net_device *dev)
 	return dev->header_ops && dev->header_ops->create;
 }
 
-typedef int gifconf_func_t(struct net_device * dev, char __user * bufptr,
+typedef int gifconf_func_t(struct net_device *dev, char __user *bufptr,
 			   int len, int size);
 int register_gifconf(unsigned int family, gifconf_func_t *gifconf);
 static inline int unregister_gifconf(unsigned int family)
@@ -3293,6 +3295,7 @@ static inline void netif_tx_start_all_queues(struct net_device *dev)
 
 	for (i = 0; i < dev->num_tx_queues; i++) {
 		struct netdev_queue *txq = netdev_get_tx_queue(dev, i);
+
 		netif_tx_start_queue(txq);
 	}
 }
@@ -3317,6 +3320,7 @@ static inline void netif_tx_wake_all_queues(struct net_device *dev)
 
 	for (i = 0; i < dev->num_tx_queues; i++) {
 		struct netdev_queue *txq = netdev_get_tx_queue(dev, i);
+
 		netif_tx_wake_queue(txq);
 	}
 }
@@ -3446,13 +3450,13 @@ static inline bool __netdev_tx_sent_queue(struct netdev_queue *dev_queue,
 }
 
 /**
- * 	netdev_sent_queue - report the number of bytes queued to hardware
- * 	@dev: network device
- * 	@bytes: number of bytes queued to the hardware device queue
+ *	netdev_sent_queue - report the number of bytes queued to hardware
+ *	@dev: network device
+ *	@bytes: number of bytes queued to the hardware device queue
  *
- * 	Report the number of bytes queued for sending/completion to the network
- * 	device hardware queue. @bytes should be a good approximation and should
- * 	exactly match netdev_completed_queue() @bytes
+ *	Report the number of bytes queued for sending/completion to the network
+ *	device hardware queue. @bytes should be a good approximation and should
+ *	exactly match netdev_completed_queue() @bytes
  */
 static inline void netdev_sent_queue(struct net_device *dev, unsigned int bytes)
 {
@@ -3492,14 +3496,14 @@ static inline void netdev_tx_completed_queue(struct netdev_queue *dev_queue,
 }
 
 /**
- * 	netdev_completed_queue - report bytes and packets completed by device
- * 	@dev: network device
- * 	@pkts: actual number of packets sent over the medium
- * 	@bytes: actual number of bytes sent over the medium
+ *	netdev_completed_queue - report bytes and packets completed by device
+ *	@dev: network device
+ *	@pkts: actual number of packets sent over the medium
+ *	@bytes: actual number of bytes sent over the medium
  *
- * 	Report the number of bytes and packets transmitted by the network device
- * 	hardware queue over the physical medium, @bytes must exactly match the
- * 	@bytes amount passed to netdev_sent_queue()
+ *	Report the number of bytes and packets transmitted by the network device
+ *	hardware queue over the physical medium, @bytes must exactly match the
+ *	@bytes amount passed to netdev_sent_queue()
  */
 static inline void netdev_completed_queue(struct net_device *dev,
 					  unsigned int pkts, unsigned int bytes)
@@ -3516,11 +3520,11 @@ static inline void netdev_tx_reset_queue(struct netdev_queue *q)
 }
 
 /**
- * 	netdev_reset_queue - reset the packets and bytes count of a network device
- * 	@dev_queue: network device
+ *	netdev_reset_queue - reset the packets and bytes count of a network device
+ *	@dev_queue: network device
  *
- * 	Reset the bytes and packet count of a network device and clear the
- * 	software flow control OFF bit for this network device
+ *	Reset the bytes and packet count of a network device and clear the
+ *	software flow control OFF bit for this network device
  */
 static inline void netdev_reset_queue(struct net_device *dev_queue)
 {
@@ -3528,12 +3532,12 @@ static inline void netdev_reset_queue(struct net_device *dev_queue)
 }
 
 /**
- * 	netdev_cap_txqueue - check if selected tx queue exceeds device queues
- * 	@dev: network device
- * 	@queue_index: given tx queue index
+ *	netdev_cap_txqueue - check if selected tx queue exceeds device queues
+ *	@dev: network device
+ *	@queue_index: given tx queue index
  *
- * 	Returns 0 if given tx queue index >= number of device tx queues,
- * 	otherwise returns the originally passed tx queue index.
+ *	Returns 0 if given tx queue index >= number of device tx queues,
+ *	otherwise returns the originally passed tx queue index.
  */
 static inline u16 netdev_cap_txqueue(struct net_device *dev, u16 queue_index)
 {
@@ -3589,6 +3593,7 @@ static inline void netif_start_subqueue(struct net_device *dev, u16 queue_index)
 static inline void netif_stop_subqueue(struct net_device *dev, u16 queue_index)
 {
 	struct netdev_queue *txq = netdev_get_tx_queue(dev, queue_index);
+
 	netif_tx_stop_queue(txq);
 }
 
@@ -4198,6 +4203,7 @@ static inline void __netif_tx_lock_bh(struct netdev_queue *txq)
 static inline bool __netif_tx_trylock(struct netdev_queue *txq)
 {
 	bool ok = spin_trylock(&txq->_xmit_lock);
+
 	if (likely(ok))
 		txq->xmit_lock_owner = smp_processor_id();
 	return ok;
@@ -5112,7 +5118,7 @@ do {								\
 /* netif printk helpers, similar to netdev_printk */
 
 #define netif_printk(priv, type, level, dev, fmt, args...)	\
-do {					  			\
+do {								\
 	if (netif_msg_##type(priv))				\
 		netdev_printk(level, (dev), fmt, ##args);	\
 } while (0)

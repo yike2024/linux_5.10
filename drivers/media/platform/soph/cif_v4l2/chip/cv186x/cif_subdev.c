@@ -149,7 +149,7 @@ static int cif_get_sensor_clk_input_info(struct v4l2_subdev *sd,
 				CIF_PR(CIF_ERROR, "have not set right input mode\n");
 			}
 		} else if (qm.index == SNS_CFG_TYPE_WDR_MODE) {
-			if (qm.value <= CVI_MIPI_WDR_MODE_BUTT && qm.value >= CVI_MIPI_WDR_MODE_NONE) {
+			if (qm.value <= MIPI_WDR_MODE_BUTT && qm.value >= MIPI_WDR_MODE_NONE) {
 				attr->mipi_attr.wdr_mode = qm.value;
 				CIF_PR(CIF_DEBUG, "wdr_mode [%s]\n", _to_string_mipi_wdr_mode(qm.value));
 			} else {
@@ -201,7 +201,7 @@ static int cvicif_cif_subscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh
 {
 #if 0
 	if (sub->type == V4L2_EVENT_FRAME_SYNC || sub->type == V4L2_EVENT_RESET_DEV) {
-		return v4l2_event_subscribe(fh, sub, CVI_CIF_EVENT_ELEMS, NULL);
+		return v4l2_event_subscribe(fh, sub, CIF_EVENT_ELEMS, NULL);
 	} else {
 		return -EINVAL;
 	}
@@ -217,7 +217,7 @@ struct combo_dev_attr_s ex_attr[MAX_LINK_NUM] = {
 			.raw_data_type = RAW_DATA_12BIT,
 			.lane_id = {0, 1, 4, 2, 3, -1, -1, -1, -1},
 			.pn_swap = {1, 1, 1, 1, 1, 0, 0, 0, 0},
-			.wdr_mode = CVI_MIPI_WDR_MODE_NONE,
+			.wdr_mode = MIPI_WDR_MODE_NONE,
 			.dphy = {
 				.enable = 1,
 				.hs_settle = 10,
@@ -259,13 +259,12 @@ static long cvicif_cif_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg
 #ifdef CONFIG_COMPAT
 static long cvicif_cif_compat_ioctl32(struct v4l2_subdev *sd, unsigned int cmd, unsigned long arg)
 {
-	//void __user *up = compat_ptr(arg);
 	//u32 csi_idx = 0;
 	long ret;
 
 	switch (cmd) {
 	default:
-		ret 0;
+		ret = 0;
 		break;
 	}
 

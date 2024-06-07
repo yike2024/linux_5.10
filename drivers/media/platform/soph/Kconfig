@@ -22,7 +22,7 @@ menuconfig V4L_SENSOR_DRIVERS
 	  Say Y here to enable support for V4L sensor drivers.
 
 if V4L_SENSOR_DRIVERS
-	source "drivers/media/platform/soph/sensor/Kconfig" 
+	source "drivers/media/platform/soph/sensor/Kconfig"
 endif
 
 endif

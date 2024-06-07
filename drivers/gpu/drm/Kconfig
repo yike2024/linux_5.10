@@ -298,6 +298,8 @@ config DRM_VKMS
 
 source "drivers/gpu/drm/cvitek/Kconfig"
 
+source "drivers/gpu/drm/ms912x/Kconfig"
+
 source "drivers/gpu/drm/exynos/Kconfig"
 
 source "drivers/gpu/drm/rockchip/Kconfig"

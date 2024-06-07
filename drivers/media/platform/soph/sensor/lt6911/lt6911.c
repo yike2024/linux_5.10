@@ -18,10 +18,12 @@
 #include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/of_gpio.h>
+#include <linux/gpio.h>
+#include <linux/interrupt.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/cif_uapi.h>
+#include <linux/comm_cif.h>
 #include <linux/sns_v4l2_uapi.h>
 
 #include "lt6911.h"
@@ -34,12 +36,21 @@
 /* Chip ID */
 #define LT6911_CHIP_ID_ADDR_H	0xa000
 #define LT6911_CHIP_ID_ADDR_L	0xa001
-#define LT6911_CHIP_ID		    0x1605
 
+#define LT6911_FRAME_HALF_PIXEL_CLOCK_H	0xe085
+#define LT6911_FRAME_HALF_PIXEL_CLOCK_M	0xe086
+#define LT6911_FRAME_HALF_PIXEL_CLOCK_L	0xe087
+#define LT6911_FRAME_HALF_WIDTH_ADDR_H	0xe08c
+#define LT6911_FRAME_HALF_WIDTH_ADDR_L	0xe08d
+#define LT6911_FRAME_HEIGHT_ADDR_H	0xe08e
+#define LT6911_FRAME_HEIGHT_ADDR_L	0xe08f
+
+#define LT6911_CHIP_ID			0x1605
+#define LT6911_I2C_BANK_ADDR		0xff
 /*Sensor type for isp middleware*/
-#define LT6911_SNS_TYPE_SDR V4L2_LONTIUM_MIPI_LT6911_8M_60FPS_8BIT
+int LT6911_SNS_TYPE_SDR = V4L2_LONTIUM_MIPI_LT6911_8M_60FPS_8BIT;
 
-static const enum mipi_wdr_mode_e lt6911_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+static const enum mipi_wdr_mode_e lt6911_wdr_mode = MIPI_WDR_MODE_NONE;
 
 static int lt6911_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -110,7 +121,7 @@ struct lt6911 {
 	struct clk       *xvclk;
 	struct gpio_desc *power_gpio;
 	struct gpio_desc *reset_gpio;
-	struct gpio_desc *pwdn_gpio;
+	struct gpio_desc *irq_gpio;
 	struct pinctrl   *pinctrl;
 
 	unsigned int lane_num;
@@ -118,6 +129,12 @@ struct lt6911 {
 };
 
 #define to_lt6911(_sd)	container_of(_sd, struct lt6911, sd)
+
+static u32 lt6911_i2c_read(struct lt6911 *lt6911, u32 addr);
+static u32 lt6911_i2c_write(struct lt6911 *lt6911, u32 addr, u32 data);
+u32 lt6911_read(struct lt6911 *lt6911, u32 addr);
+u32 lt6911_write(struct lt6911 *lt6911, u32 addr, u32 data);
+
 
 /* Read registers up to 4 at a time */
 static int lt6911_read_reg(struct lt6911 *lt6911, u8 reg, u32 len,
@@ -192,8 +209,7 @@ static int lt6911_write_regs(struct lt6911 *lt6911,
 	u32 i;
 
 	for (i = 0; i < len; i++) {
-		ret = lt6911_write_reg(lt6911, regs[i].address, 1,
-					regs[i].val);
+		ret = lt6911_write(lt6911, regs[i].address, regs[i].val);
 		if (ret) {
 			dev_err_ratelimited(&client->dev, "Failed to write reg 0x%4.4x. error=%d\n",
 					    regs[i].address, ret);
@@ -205,14 +221,41 @@ static int lt6911_write_regs(struct lt6911 *lt6911,
 	return 0;
 }
 
-int lt6911_read(struct lt6911 *lt6911, int addr)
+u32 lt6911_i2c_read(struct lt6911 *lt6911, u32 addr)
 {
-	int data = 0;
-
-	lt6911_write_reg(lt6911, 0x80ee, REG_VALUE_08BIT, 0x01);
-	data = lt6911_read_reg(lt6911, addr, REG_VALUE_08BIT, &data);
-	lt6911_write_reg(lt6911, 0x80ee, REG_VALUE_08BIT, 0x00);
+	u8 bank = addr >> 8;
+	u8 high_addr = addr & 0xff;
+	u32 data;
+	lt6911_write_reg(lt6911, LT6911_I2C_BANK_ADDR, REG_VALUE_08BIT, bank);
+	lt6911_read_reg(lt6911, high_addr, REG_VALUE_08BIT, &data);
 	return data;
+}
+
+u32 lt6911_i2c_write(struct lt6911 *lt6911, u32 addr, u32 data)
+{
+	uint8_t bank = addr >> 8;
+	uint8_t high_addr = addr & 0xff;
+
+	lt6911_write_reg(lt6911, LT6911_I2C_BANK_ADDR, REG_VALUE_08BIT, bank);
+	return lt6911_write_reg(lt6911, high_addr, REG_VALUE_08BIT, data);
+}
+
+u32 lt6911_read(struct lt6911 *lt6911, u32 addr)
+{
+	u32 data = 0;
+
+	lt6911_i2c_write(lt6911, 0x80ee, 0x01);
+	data = lt6911_i2c_read(lt6911, addr);
+	lt6911_i2c_write(lt6911, 0x80ee, 0x00);
+	return data;
+}
+
+u32 lt6911_write(struct lt6911 *lt6911, u32 addr, u32 data)
+{
+	lt6911_i2c_write(lt6911, 0x80ee, 0x01);
+	lt6911_i2c_write(lt6911, addr, data);
+	lt6911_i2c_write(lt6911, 0x80ee, 0x00);
+	return 0;
 }
 
 /* Open sub-device */
@@ -271,6 +314,50 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
+void auto_get_imgage_size(struct lt6911 *lt6911) {
+
+	int height_h, height_l, width_h, width_l, height, width;
+	int pixel_clock_h, pixel_clock_m, pixel_clock_l, pixel_clock;
+	int tens_digit;
+
+	width_h = lt6911_read(lt6911, LT6911_FRAME_HALF_WIDTH_ADDR_H);
+	width_l = lt6911_read(lt6911, LT6911_FRAME_HALF_WIDTH_ADDR_L);
+	width = (((width_h & 0xFF) << 8) | (width_l & 0xFF)) * 2;
+
+	height_h = lt6911_read(lt6911, LT6911_FRAME_HEIGHT_ADDR_H);
+	height_l = lt6911_read(lt6911, LT6911_FRAME_HEIGHT_ADDR_L);
+	height = (((height_h & 0xFF) << 8) | (height_l & 0xFF));
+
+	pixel_clock_h = lt6911_read(lt6911, LT6911_FRAME_HALF_PIXEL_CLOCK_H);
+	pixel_clock_m = lt6911_read(lt6911, LT6911_FRAME_HALF_PIXEL_CLOCK_M);
+	pixel_clock_l = lt6911_read(lt6911, LT6911_FRAME_HALF_PIXEL_CLOCK_L);
+	pixel_clock = ((pixel_clock_h << 16) | (pixel_clock_m << 8) | pixel_clock_l) * 1000 * 2;
+
+	tens_digit = pixel_clock/(width*height);
+	tens_digit /= 10;
+	switch(tens_digit) {
+		case 6:
+			LT6911_SNS_TYPE_SDR = V4L2_LONTIUM_MIPI_LT6911_8M_60FPS_8BIT;
+			pr_info("Set fps = 60 on the input\n");
+		break;
+		case 3:
+			LT6911_SNS_TYPE_SDR = V4L2_LONTIUM_MIPI_LT6911_8M_30FPS_8BIT;
+			pr_info("Set fps = 30 on the input\n");
+		break;
+		default:
+			LT6911_SNS_TYPE_SDR = V4L2_LONTIUM_MIPI_LT6911_8M_30FPS_8BIT;
+			printk("no suitable fps, default fps = 30\n");
+		break;
+    	}
+
+	lt6911->cur_mode->width = width;
+	lt6911->cur_mode->max_width = width;
+	lt6911->cur_mode->height = height;
+	lt6911->cur_mode->max_height = height;
+
+	pr_info("after irq width = %d, height = %d\n", width, height);
+}
+
 static int enum_frame_size(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_frame_size_enum *fse)
@@ -302,6 +389,7 @@ static int get_pad_format(struct v4l2_subdev *sd,
 	int ret = 0;
 
 	mutex_lock(&lt6911->mutex);
+
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 		framefmt = v4l2_subdev_get_try_format(sd, cfg, fmt->pad);
 		fmt->format = *framefmt;
@@ -353,7 +441,7 @@ static int start_streaming(struct lt6911 *lt6911)
 	const sns_sync_info_t *sync_info;
 	int ret;
 
-	if (lt6911->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+	if (lt6911->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
 		reg_list = &lt6911->cur_mode->reg_list;
 	}
 
@@ -471,6 +559,12 @@ error:
 	return ret;
 }
 
+static irqreturn_t lt6911_gpio_irq_thread_handler(int irq, void *data)
+{
+	auto_get_imgage_size(data);
+	return IRQ_HANDLED;
+}
+
 /* Verify chip ID */
 static int lt6911_identify_module(struct lt6911 *lt6911)
 {
@@ -484,9 +578,7 @@ static int lt6911_identify_module(struct lt6911 *lt6911)
 		return nVal;
 
 	nVal2 = lt6911_read(lt6911, LT6911_CHIP_ID_ADDR_L);
-
 	read_data = (((nVal & 0xFF) << 8) | (nVal2 & 0xFF));
-
 	if (read_data != LT6911_CHIP_ID) {
 		dev_err(&client->dev, "chip id(%x) mismatch, read(%x)\n",
 			LT6911_CHIP_ID, read_data);
@@ -554,7 +646,7 @@ static long lt6911_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		int type = 0;
 
-		if (lt6911->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+		if (lt6911->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
 			type = LT6911_SNS_TYPE_SDR;
 		}
 
@@ -565,6 +657,7 @@ static long lt6911_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case SNS_V4L2_SET_MIRROR_FLIP:
 	{
 		struct i2c_client *client = v4l2_get_subdevdata(&lt6911->sd);
+
 		dev_warn(&client->dev, "Not support Mirror and Filp!\n");
 		break;
 	}
@@ -590,7 +683,7 @@ static long lt6911_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		if (hdr_on)
 			dev_warn(&client->dev, "Not support HDR!\n");
 		else
-			lt6911->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+			lt6911->cur_mode->mipi_wdr_mode = MIPI_WDR_MODE_NONE;
 
 		lt6911_update_link_menu(lt6911);
 		break;
@@ -614,7 +707,6 @@ static long lt6911_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static long lt6911_compat_ioctl32(struct v4l2_subdev *sd,
 				   unsigned int cmd, unsigned long arg)
 {
-	void __user *up = compat_ptr(arg);
 	long ret;
 
 	switch (cmd) {
@@ -836,6 +928,26 @@ static int lt6911_probe(struct i2c_client *client,
 
 	dev_info(dev, "sensor_%d probe success\n", index_id);
 
+	lt6911->irq_gpio = devm_gpiod_get(dev, "irq", GPIOD_IN);
+	if (IS_ERR(lt6911->irq_gpio)) {
+		dev_err(dev, "cannot get irq gpio property\n");
+		return PTR_ERR(lt6911->irq_gpio);
+	}
+	client->irq = gpiod_to_irq(lt6911->irq_gpio);
+	if (client->irq < 0) {
+		dev_err(&client->dev, "failed to get irq\n");
+		return -EINVAL;
+	}
+	ret = devm_request_threaded_irq(dev, client->irq, NULL,
+					lt6911_gpio_irq_thread_handler,
+					IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING |
+					IRQF_ONESHOT, "lt6911", lt6911);
+	if (ret) {
+		dev_err(&client->dev, "failed to request irq\n");
+		return ret;
+	}
+	dev_info(dev, "sensor_%d request_irq success\n", index_id);
+
 	return 0;
 
 error_media_entity:
@@ -865,12 +977,12 @@ static int lt6911_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id lt6911_of_match[] = {
-	{ .compatible = "v4l2,sensor0" },
-	{ .compatible = "v4l2,sensor1" },
-	{ .compatible = "v4l2,sensor2" },
-	{ .compatible = "v4l2,sensor3" },
-	{ .compatible = "v4l2,sensor4" },
-	{ .compatible = "v4l2,sensor5" },
+	{ .compatible = "cvitek,sensor0" },
+	{ .compatible = "cvitek,sensor1" },
+	{ .compatible = "cvitek,sensor2" },
+	{ .compatible = "cvitek,sensor3" },
+	{ .compatible = "cvitek,sensor4" },
+	{ .compatible = "cvitek,sensor5" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, lt6911_of_match);

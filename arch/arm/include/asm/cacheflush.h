@@ -193,7 +193,7 @@ extern void copy_to_user_page(struct vm_area_struct *, struct page *,
  * will fall through to use __flush_icache_all_generic.
  */
 #if (defined(CONFIG_CPU_V7) && \
-     (defined(CONFIG_CPU_V6) || defined(CONFIG_CPU_V6K))) || \
+	(defined(CONFIG_CPU_V6) || defined(CONFIG_CPU_V6K))) || \
 	defined(CONFIG_SMP_ON_UP)
 #define __flush_icache_preferred	__cpuc_flush_icache_all
 #elif __LINUX_ARM_ARCH__ >= 7 && defined(CONFIG_SMP)
@@ -240,6 +240,7 @@ vivt_flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr, unsig
 
 	if (!mm || cpumask_test_cpu(smp_processor_id(), mm_cpumask(mm))) {
 		unsigned long addr = user_addr & PAGE_MASK;
+
 		__cpuc_flush_user_range(addr, addr + PAGE_SIZE, vma->vm_flags);
 	}
 }
@@ -247,10 +248,10 @@ vivt_flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr, unsig
 #ifndef CONFIG_CPU_CACHE_VIPT
 #define flush_cache_mm(mm) \
 		vivt_flush_cache_mm(mm)
-#define flush_cache_range(vma,start,end) \
-		vivt_flush_cache_range(vma,start,end)
-#define flush_cache_page(vma,addr,pfn) \
-		vivt_flush_cache_page(vma,addr,pfn)
+#define flush_cache_range(vma, start, end) \
+		vivt_flush_cache_range(vma, start, end)
+#define flush_cache_page(vma, addr, pfn) \
+		vivt_flush_cache_page(vma, addr, pfn)
 #else
 extern void flush_cache_mm(struct mm_struct *mm);
 extern void flush_cache_range(struct vm_area_struct *vma, unsigned long start, unsigned long end);
@@ -264,19 +265,19 @@ extern void flush_cache_page(struct vm_area_struct *vma, unsigned long user_addr
  * Harvard caches are synchronised for the user space address range.
  * This is used for the ARM private sys_cacheflush system call.
  */
-#define flush_icache_user_range(s,e)	__cpuc_coherent_user_range(s,e)
+#define flush_icache_user_range(s, e)	__cpuc_coherent_user_range(s, e)
 
 /*
  * Perform necessary cache operations to ensure that data previously
  * stored within this range of addresses can be executed by the CPU.
  */
-#define flush_icache_range(s,e)		__cpuc_coherent_kern_range(s,e)
+#define flush_icache_range(s, e)		__cpuc_coherent_kern_range(s, e)
 
 /*
  * Perform necessary cache operations to ensure that the TLB will
  * see data written in the specified area.
  */
-#define clean_dcache_area(start,size)	cpu_dcache_clean_area(start, size)
+#define clean_dcache_area(start, size)	cpu_dcache_clean_area(start, size)
 
 /*
  * flush_dcache_page is used when the kernel has written to the page
@@ -296,12 +297,12 @@ extern void flush_dcache_page(struct page *);
 static inline void flush_kernel_vmap_range(void *addr, int size)
 {
 	if ((cache_is_vivt() || cache_is_vipt_aliasing()))
-	  __cpuc_flush_dcache_area(addr, (size_t)size);
+		__cpuc_flush_dcache_area(addr, (size_t)size);
 }
 static inline void invalidate_kernel_vmap_range(void *addr, int size)
 {
 	if ((cache_is_vivt() || cache_is_vipt_aliasing()))
-	  __cpuc_flush_dcache_area(addr, (size_t)size);
+		__cpuc_flush_dcache_area(addr, (size_t)size);
 }
 
 #define ARCH_HAS_FLUSH_ANON_PAGE
@@ -324,7 +325,7 @@ extern void flush_kernel_dcache_page(struct page *);
  * We don't appear to need to do anything here.  In fact, if we did, we'd
  * duplicate cache flushing elsewhere performed by flush_dcache_page().
  */
-#define flush_icache_page(vma,page)	do { } while (0)
+#define flush_icache_page(vma, page)	do { } while (0)
 
 /*
  * flush_cache_vmap() is used when creating mappings (eg, via vmap,
@@ -455,22 +456,22 @@ static inline void __sync_cache_range_r(volatile void *p, size_t size)
  *   trampoline are inserted by the linker and to keep sp 64-bit aligned.
  */
 #define v7_exit_coherency_flush(level) \
-	asm volatile( \
-	".arch	armv7-a \n\t" \
-	"stmfd	sp!, {fp, ip} \n\t" \
-	"mrc	p15, 0, r0, c1, c0, 0	@ get SCTLR \n\t" \
-	"bic	r0, r0, #"__stringify(CR_C)" \n\t" \
-	"mcr	p15, 0, r0, c1, c0, 0	@ set SCTLR \n\t" \
-	"isb	\n\t" \
-	"bl	v7_flush_dcache_"__stringify(level)" \n\t" \
-	"mrc	p15, 0, r0, c1, c0, 1	@ get ACTLR \n\t" \
-	"bic	r0, r0, #(1 << 6)	@ disable local coherency \n\t" \
-	"mcr	p15, 0, r0, c1, c0, 1	@ set ACTLR \n\t" \
-	"isb	\n\t" \
-	"dsb	\n\t" \
+	(asm volatile( \
+	".arch	armv7-a\n\t" \
+	"stmfd	sp!, {fp, ip}\n\t" \
+	"mrc	p15, 0, r0, c1, c0, 0	@ get SCTLR\n\t" \
+	"bic	r0, r0, #"__stringify(CR_C)"\n\t" \
+	"mcr	p15, 0, r0, c1, c0, 0	@ set SCTLR\n\t" \
+	"isb\n\t" \
+	"bl	v7_flush_dcache_"__stringify(level)"\n\t" \
+	"mrc	p15, 0, r0, c1, c0, 1	@ get ACTLR\n\t" \
+	"bic	r0, r0, #(1 << 6)	@ disable local coherency\n\t" \
+	"mcr	p15, 0, r0, c1, c0, 1	@ set ACTLR\n\t" \
+	"isb\n\t" \
+	"dsb\n\t" \
 	"ldmfd	sp!, {fp, ip}" \
-	: : : "r0","r1","r2","r3","r4","r5","r6","r7", \
-	      "r9","r10","lr","memory" )
+	: : : "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", \
+		"r9", "r10", "lr", "memory"))
 
 void flush_uprobe_xol_access(struct page *page, unsigned long uaddr,
 			     void *kaddr, unsigned long len);

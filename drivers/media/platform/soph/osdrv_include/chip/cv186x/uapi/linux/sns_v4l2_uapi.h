@@ -13,7 +13,7 @@ typedef struct sns_i2c_info {
 }sns_i2c_info_t;
 struct reg_info {
 	__u16 address;
-	__u8 val;
+	__u16 val;
 };
 typedef struct sns_sync_info {
 	__u32 num_of_regs;
@@ -28,6 +28,7 @@ typedef struct sns_sync_info {
 #define SNS_V4L2_GET_I2C_INFO    _IOWR('V', BASE_VIDIOC_PRIVATE + 3, sns_i2c_info_t)
 
 #define SNS_V4L2_SET_HDR_ON      _IOWR('V', BASE_VIDIOC_PRIVATE + 4, int)
+
 #define SNS_V4L2_SET_SNS_SYNC_INFO  _IOWR('V', BASE_VIDIOC_PRIVATE + 5, sns_sync_info_t)
 // see any update on sample_comm.h
 typedef enum _V4L2_SNS_TYPE_E {
@@ -47,6 +48,7 @@ typedef enum _V4L2_SNS_TYPE_E {
 	V4L2_NEXTCHIP_N5_1M_2CH_25FPS_8BIT,
 	V4L2_NEXTCHIP_N5_2M_25FPS_8BIT,
 	V4L2_NEXTCHIP_N6_2M_4CH_25FPS_8BIT,
+	V4L2_ONSEMI_AR2020_20M_25FPS_10BIT,
 	V4L2_OV_OS02D10_MIPI_2M_30FPS_10BIT,
 	V4L2_OV_OS02D10_SLAVE_MIPI_2M_30FPS_10BIT,
 	V4L2_OV_OS02K10_SLAVE_MIPI_2M_30FPS_12BIT,
@@ -145,6 +147,9 @@ typedef enum _V4L2_SNS_TYPE_E {
 	V4L2_LONTIUM_MIPI_LT6911_1M_60FPS_8BIT,
 	V4L2_LONTIUM_MIPI_LT6911_2M_60FPS_8BIT,
 	V4L2_LONTIUM_MIPI_LT6911_8M_60FPS_8BIT,
+	V4L2_LONTIUM_MIPI_LT6911_1M_30FPS_8BIT,
+	V4L2_LONTIUM_MIPI_LT6911_2M_30FPS_8BIT,
+	V4L2_LONTIUM_MIPI_LT6911_8M_30FPS_8BIT,
 	/* ------ LINEAR END ------*/
 	V4L2_SNS_TYPE_LINEAR_BUTT,
 

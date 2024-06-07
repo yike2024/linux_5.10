@@ -981,8 +981,8 @@ static int m88e1116r_config_init(struct phy_device *phydev)
 		return err;
 
 	if (phy_interface_is_rgmii(phydev)) {
-#if !defined(CONFIG_ARCH_CV186X_FPGA )
-		printk("not fpga\n");
+#if !defined(CONFIG_ARCH_CV186X_FPGA)
+		pr_info("not fpga\n");
 		err = m88e1121_config_aneg_rgmii_delays(phydev);
 		if (err < 0)
 			return err;

@@ -73,6 +73,7 @@ static struct snd_soc_dai_link_component cv181x_dac_platform[] = {
 	},
 
 };
+
 static struct snd_soc_dai_link cv181x_dac_dai[] = {
 	{
 		.name = "cviteka-i2s-dac",
@@ -140,7 +141,8 @@ static int cv181x_dac_proc_show(struct seq_file *m, void *v)
 	seq_puts(m, "\n------------- CVI AO ATTRIBUTE -------------\n");
 	seq_puts(m, "AiDev    Workmode    SampleRate    BitWidth\n");
 	val1 = (readl(i2s3) >> 1) & 0x1;
-	val2 = audio_freq/((readl(i2s3 + 0x64) & 0x0000ffff)*(0x1 << (readl(dac + AUDIO_PHY_TXDAC_CTRL1) & 0x3))*64*4);
+	val2 = audio_freq / ((readl(i2s3 + 0x64) & 0x0000ffff) *
+	       (0x1 << (readl(dac + AUDIO_PHY_TXDAC_CTRL1) & 0x3)) * 64 * 4);
 	val3 = ((readl(i2s3 + 0x10) >> 1) & 0x3) * 16;
 	seq_printf(m, "  %d       %s        %6d        %2d\n", 1, val1 == 0 ? "slave" : "master", val2, val3);
 	seq_puts(m, "\n");
@@ -178,7 +180,6 @@ static int cv181x_dac_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-
 static int seq_cv181x_dac_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, cv181x_dac_proc_show, PDE_DATA(inode));
@@ -198,7 +199,6 @@ static const struct of_device_id cvi_audio_match_ids[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, cvi_audio_match_ids);
-
 
 static int cv181x_dac_probe(struct platform_device *pdev)
 {
@@ -222,7 +222,7 @@ static int cv181x_dac_probe(struct platform_device *pdev)
 				dev_err(&pdev->dev, "Error creating audio_debug proc folder entry\n");
 		}
 
-		if (proc_audio_dir && (proc_ao_not_allocted == true)) {
+		if (proc_audio_dir && proc_ao_not_allocted) {
 			proc_ao = proc_create_data("cviteka_dac", 0444, proc_audio_dir, &cv181x_dac_proc_ops, np);
 			if (!proc_ao)
 				dev_err(&pdev->dev, "Create cviteka_dac proc failed!\n");
@@ -235,7 +235,6 @@ static int cv181x_dac_probe(struct platform_device *pdev)
 	return 0;
 
 }
-
 
 #ifdef CONFIG_PM
 int cv181x_cv181xdac_suspend(struct device *dev)

@@ -19,7 +19,7 @@ static s64 imx412_link_cif_menu[1][SNS_CFG_TYPE_MAX] = {
 		0,                      //2:mclk num
 		RX_MAC_CLK_900M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
-		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
+		MIPI_WDR_MODE_NONE,     //5:wdr mode
 		RAW_DATA_12BIT,         //6:data type
 		0,                      //7:mipi_dev
 		1,                      //8:dphy.enable

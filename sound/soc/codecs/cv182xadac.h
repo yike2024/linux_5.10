@@ -292,8 +292,14 @@
 
 #define DAC_VOL_L_MASK		0x000001FF
 #define CV182x_DAC_VOL_STEP	0x8
-#define DAC_VOL_L(V) (V == 0 ? 0 : (V * CV182x_DAC_VOL_STEP) - 1)
-#define DAC_VOL_R(V) ((V == 0 ? 0 : (V * CV182x_DAC_VOL_STEP) - 1) << 16)
+#define DAC_VOL_L(V) ({ \
+	int _v = (V); \
+	_v == 0 ? 0 : (_v * CV182x_DAC_VOL_STEP) - 1; \
+})
+#define DAC_VOL_R(V) ({ \
+	int _v = (V); \
+	((_v == 0 ? 0 : (_v * CV182x_DAC_VOL_STEP) - 1) << 16); \
+})
 
 #define  ADC_VOL_GAIN_0		0x0001 /* 0dB */
 #define  ADC_VOL_GAIN_1		0x0002 /* 2dB */
@@ -332,7 +338,6 @@
 #define  AUDIO_PHY_REG_GAINR_STATUS_OFFSET 16
 #define  AUDIO_PHY_REG_GAINR_STATUS_MASK   0xffff0000
 #define  AUDIO_PHY_REG_GAINR_STATUS_BITS   0x10
-
 
 #define  AUDIO_PHY_REG_MUTEL_RXPGA   0x118
 #define  AUDIO_PHY_REG_MUTEL_RXPGA_OFFSET 0
@@ -499,7 +504,7 @@
 #define  AUDIO_PHY_REG_SPARE0_MASK   0xffffffff
 #define  AUDIO_PHY_REG_SPARE0_BITS   0x20
 #define  AUDIO_ADC_SCK_DIV_MASK		0x00ff0000
-#define  SPARE_SCK_DIV(l)		((l-1) << 16)
+#define  SPARE_SCK_DIV(l)		(((l) - 1) << 16)
 
 #define  AUDIO_PHY_REG_SPARE1   0xff4
 #define  AUDIO_PHY_REG_SPARE1_OFFSET 0
@@ -525,8 +530,7 @@
 #define CVI_I2S_AU_OFF					0xFFFFFEFF
 
 #define CVI_I2S_MCLK_MASK		0x0000FFFF
-#define CVI_I2S_MCLK_DIV(l)             ((l << 0) & 0x0000FFFF)
-
+#define CVI_I2S_MCLK_DIV(l)             (((l) << 0) & 0x0000FFFF)
 
 #ifdef CONFIG_PM_SLEEP
 /* Store GPIO context across system-wide suspend/resume transitions */
@@ -556,7 +560,7 @@ struct cv182xadc {
 	struct device *dev;
 	struct miscdevice miscdev;
 	void __iomem *mclk_source;
-	struct mutex mutex;
+	struct mutex mutex; /* Protects the access to adc resources */
 #ifdef CONFIG_PM_SLEEP
 	struct cv182xadc_context *reg_ctx;
 #endif
@@ -567,7 +571,7 @@ struct cv182xdac {
 	struct clk *clk;
 	struct device *dev;
 	struct miscdevice miscdev;
-	struct mutex mutex;
+	struct mutex mutex; /* Protects the access to dac resources */
 #ifdef CONFIG_PM_SLEEP
 	struct cv182xdac_context *reg_ctx;
 #endif

@@ -125,3 +125,4 @@ obj-$(CONFIG_DRM_MCDE) += mcde/
 obj-$(CONFIG_DRM_TIDSS) += tidss/
 obj-y			+= xlnx/
 obj-$(CONFIG_DRM_CVITEK) +=cvitek/
+obj-$(CONFIG_DRM_USB_TO_HDMI) +=ms912x/

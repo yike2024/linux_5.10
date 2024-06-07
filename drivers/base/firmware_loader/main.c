@@ -87,7 +87,8 @@ static inline struct fw_priv *to_fw_priv(struct kref *ref)
 #define	FW_LOADER_START_CACHE	1
 
 /* fw_lock could be moved to 'struct fw_sysfs' but since it is just
- * guarding for corner cases a global lock should be OK */
+ * guarding for corner cases a global lock should be OK
+ */
 DEFINE_MUTEX(fw_lock);
 
 static struct firmware_cache fw_cache;
@@ -285,6 +286,7 @@ static void __free_fw_priv(struct kref *ref)
 static void free_fw_priv(struct fw_priv *fw_priv)
 {
 	struct firmware_cache *fwc = fw_priv->fwc;
+
 	spin_lock(&fwc->lock);
 	if (!kref_put(&fw_priv->ref, __free_fw_priv))
 		spin_unlock(&fwc->lock);
@@ -1317,6 +1319,7 @@ static int devm_name_match(struct device *dev, void *res,
 			   void *match_data)
 {
 	struct fw_name_devm *fwn = res;
+
 	return (fwn->magic == (unsigned long)match_data);
 }
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 // Date Created   : 02-06-2023
 // Description    : This is simple CAN IP driver
 // Generator      : IIP Compiler Version 1.1
@@ -18,7 +19,6 @@
 #include "cvitek_can.h"
 #include "sdvt_can_basic.h"
 #include "sdvt_can_defines.h"
-
 
 static const struct can_bittiming_const sdvt_can_bittiming_const = {
 	.name = KBUILD_MODNAME,
@@ -43,7 +43,6 @@ static const struct can_bittiming_const sdvt_can_data_bittiming_const = {
 	.brp_max = 128,
 	.brp_inc = 2,
 };
-
 
 static inline void sdvt_can_enable_all_interrupts(struct sdvt_can_classdev *cdev, struct sdvt_can_config *cfg_o)
 {
@@ -100,14 +99,13 @@ static void sdvt_can_read_fifo(struct net_device *dev)
 		receive_frame(cdev, cmd_o, cfg_o);
 		cf->len =  cmd_o->rx_len_2d_8b[1];
 		cf->can_id =  cmd_o->ident_32b;
-		for (m_i_i = 0; m_i_i < cf->len; m_i_i += 1) {
+		for (m_i_i = 0; m_i_i < cf->len; m_i_i += 1)
 			((u_int8_t *)cf->data)[m_i_i] = cmd_o->rx_data_2d_8b[m_i_i];
-		}
 	}
 
 	cmd_o->irq_status1_8b = 0x00;
 	cmd_o->irq_status0_8b = 0x00;
-	dev_info(cdev->dev,"\n");
+	dev_info(cdev->dev, "\n");
 
 	stats->rx_packets++;
 	stats->rx_bytes += cf->len;
@@ -120,7 +118,6 @@ static int sdvt_can_do_rx_poll(struct net_device *dev, int quota, struct sdvt_ca
 
 	while (((cmd_o->irq_status1_8b & (1 << SDVT_CAN_IRQ_RX_DATA_FRAME)) ||
 		(cmd_o->irq_status0_8b & (1 << SDVT_CAN_IRQ_REMOTE_FRAME))) && quota > 0) {
-
 		sdvt_can_read_fifo(dev);
 		quota--;
 		pkts++;
@@ -128,7 +125,6 @@ static int sdvt_can_do_rx_poll(struct net_device *dev, int quota, struct sdvt_ca
 
 	return pkts;
 }
-
 
 static int sdvt_can_clk_start(struct sdvt_can_classdev *cdev)
 {
@@ -152,14 +148,13 @@ static void sdvt_can_clk_stop(struct sdvt_can_classdev *cdev)
 		pm_runtime_put_sync(cdev->dev);
 }
 
-
 static int sdvt_can_rx_handler(struct net_device *dev, int quota, struct sdvt_can_command *cmd_o)
 {
 	int work_done = 0;
 
 	if (!((cmd_o->irq_status1_8b & (1 << SDVT_CAN_IRQ_RX_DATA_FRAME)) ||
 	      (cmd_o->irq_status0_8b & (1 << SDVT_CAN_IRQ_REMOTE_FRAME)))) {
-		pr_err("status isn't true \n");
+		pr_err("status isn't true\n");
 		goto end;
 	}
 
@@ -168,7 +163,6 @@ static int sdvt_can_rx_handler(struct net_device *dev, int quota, struct sdvt_ca
 end:
 	return work_done;
 }
-
 
 static int sdvt_can_poll(struct napi_struct *napi, int quota)
 {
@@ -203,7 +197,7 @@ void sdvt_set_can_bittiming(struct net_device *dev)
 	cfg_o->cfg_nor_time_segment1_3b = bt->prop_seg + bt->phase_seg1 - 1;
 	cfg_o->cfg_nor_time_segment2_4b = bt->phase_seg2 - 1;
 
-	if(cdev->can.ctrlmode & CAN_CTRLMODE_FD){
+	if (cdev->can.ctrlmode & CAN_CTRLMODE_FD) {
 		cfg_o->cfg_fd_clk_divider_8b = 0;
 		cfg_o->cfg_fd_baud_prescaler_6b = dbt->brp / 2 - 1;
 		cfg_o->cfg_fd_sync_jump_width_2b = dbt->sjw - 1;
@@ -228,9 +222,9 @@ static irqreturn_t sdvt_can_irq_handler(int irq, void *dev_id)
 		return IRQ_NONE;
 
 	detect_irq_status(cdev, cmd_o);
-	//1-------------------------------------------------------------------------------------------------
+	//1-----------------------------------------------------------------------------------------
 	// Check IRQ status
-	//1-------------------------------------------------------------------------------------------------
+	//1-----------------------------------------------------------------------------------------
 	if ((cmd_o->irq_status1_8b & (1 << SDVT_CAN_IRQ_RX_DATA_FRAME)) ||
 	    (cmd_o->irq_status0_8b & (1 << SDVT_CAN_IRQ_REMOTE_FRAME))) {
 		/* RX data */
@@ -277,13 +271,13 @@ static void sdvt_can_chip_config(struct net_device *dev)
 	cfg_o->cfg_acceptance_mask2_8b        = 0xFF;
 	cfg_o->cfg_acceptance_mask3_8b        = 0xFF;
 
-	if(cdev->can.ctrlmode & CAN_CTRLMODE_FD){
+	if (cdev->can.ctrlmode & CAN_CTRLMODE_FD) {
 		cfg_o->cfg_remote_resp_en_b           = 0;
 		cfg_o->cfg_ext_ctrl_remote_en_b       = 0;
 		cfg_o->cfg_ext_frame_mode_b           = SDVT_CAN_STANDARD_FRAME;
 		cfg_o->cfg_can_mode_2b                = SDVT_CAN_FD_MODE;
 
-	}else{
+	} else {
 		cfg_o->cfg_remote_resp_en_b           = 0;
 		cfg_o->cfg_ext_ctrl_remote_en_b       = 1;
 		cfg_o->cfg_ext_frame_mode_b           = SDVT_CAN_EXTENDED_FRAME;
@@ -338,15 +332,14 @@ static int sdvt_can_dev_setup(struct sdvt_can_classdev *sdvt_can_dev)
 
 	sdvt_can_dev->can.do_set_mode = sdvt_can_set_mode;
 	sdvt_can_dev->can.ctrlmode_supported = CAN_CTRLMODE_LOOPBACK |
-                    CAN_CTRLMODE_LISTENONLY |
-                    CAN_CTRLMODE_BERR_REPORTING |
-                    CAN_CTRLMODE_FD |
-                    CAN_CTRLMODE_ONE_SHOT;
+					CAN_CTRLMODE_LISTENONLY |
+					CAN_CTRLMODE_BERR_REPORTING |
+					CAN_CTRLMODE_FD |
+					CAN_CTRLMODE_ONE_SHOT;
 
 	sdvt_can_dev->can.bittiming_const = &sdvt_can_bittiming_const;
 
 	sdvt_can_dev->can.data_bittiming_const = &sdvt_can_data_bittiming_const;
-
 
 	return 0;
 }
@@ -396,7 +389,7 @@ static netdev_tx_t stvd_can_tx_handler(struct sdvt_can_classdev *cdev)
 	int m_i_i   = 0;
 
 	// cfg_o.cfg_ext_frame_mode_b = 0;
-  	// cmd_o.remote_resp_en_b  = 0;
+	// cmd_o.remote_resp_en_b  = 0;
 	cmd_o->data_len_code_4b  = cf->len;
 	cmd_o->dlc_4b = cmd_o->data_len_code_4b;
 
@@ -423,22 +416,21 @@ static netdev_tx_t sdvt_can_start_xmit(struct sk_buff *skb,
 	if (can_dropped_invalid_skb(dev, skb))
 		return NETDEV_TX_OK;
 	if (frame->can_id & CAN_EFF_FLAG) {
-		pr_err("extern frame:%x \n",frame->can_id);
+		pr_err("extern frame:%x\n", frame->can_id);
 		cmd_o->ident_32b  = frame->can_id & CAN_EFF_MASK;
-		if (frame->can_id & CAN_RTR_FLAG){
+		if (frame->can_id & CAN_RTR_FLAG)
 			cmd_o->command_8b = EXTENDED_REMOTE_FRAME;
-		}else{
+		else
 			cmd_o->command_8b = EXTENDED_DATA_FRAME;
-		}
 
 	} else {
-		pr_err("stand frame:%x \n",frame->can_id);
+		pr_err("stand frame:%x\n", frame->can_id);
 		cmd_o->ident_32b  = frame->can_id & CAN_SFF_MASK;
-		if (frame->can_id & CAN_RTR_FLAG){
+		if (frame->can_id & CAN_RTR_FLAG)
 			cmd_o->command_8b = STANDARD_REMOTE_FRAME;
-		}else{
+		else
 			cmd_o->command_8b = STANDARD_DATA_FRAME;
-		}
+
 	}
 
 	cdev->tx_skb = skb;
@@ -501,7 +493,6 @@ static int register_sdvt_can_dev(struct net_device *dev)
 
 	return register_candev(dev);
 }
-
 
 int sdvt_can_class_get_clocks(struct sdvt_can_classdev *sdvt_can_dev)
 {
@@ -594,6 +585,7 @@ int sdvt_can_class_suspend(struct device *dev)
 	struct net_device *ndev = dev_get_drvdata(dev);
 	struct sdvt_can_classdev *cdev = netdev_priv(ndev);
 
+	dev_info(dev, "sdvt_can_class_suspend");
 	if (netif_running(ndev)) {
 		netif_stop_queue(ndev);
 		netif_device_detach(ndev);
@@ -613,6 +605,7 @@ int sdvt_can_class_resume(struct device *dev)
 	struct net_device *ndev = dev_get_drvdata(dev);
 	struct sdvt_can_classdev *cdev = netdev_priv(ndev);
 
+	dev_info(dev, "sdvt_can_class_resume");
 	pinctrl_pm_select_default_state(dev);
 	cdev->can.state = CAN_STATE_ERROR_ACTIVE;
 
@@ -630,7 +623,7 @@ int sdvt_can_class_resume(struct device *dev)
 
 	return 0;
 }
-// EXPORT_SYMBOL_GPL(sdvt_can_class_resume);
+EXPORT_SYMBOL_GPL(sdvt_can_class_resume);
 
 void sdvt_can_class_unregister(struct sdvt_can_classdev *sdvt_can_dev)
 {

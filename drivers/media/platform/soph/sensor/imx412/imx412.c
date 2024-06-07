@@ -21,7 +21,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/cif_uapi.h>
+#include <linux/comm_cif.h>
 #include <linux/sns_v4l2_uapi.h>
 
 #include "imx412.h"
@@ -40,7 +40,7 @@
 #define IMX412_SNS_TYPE_SDR V4L2_SONY_IMX412_MIPI_12M_30FPS_12BIT
 #define IMX412_SNS_TYPE_WDR V4L2_SNS_TYPE_BUTT  //mean unsupport wdr yet
 
-static const enum mipi_wdr_mode_e imx412_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+static const enum mipi_wdr_mode_e imx412_wdr_mode = MIPI_WDR_MODE_NONE;
 
 static int imx412_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -81,7 +81,7 @@ static struct imx412_mode supported_modes[] = {
 		.exp_def = 0x2000,
 		.hts_def = 0x4C4,   //0x4C4  linear   0x294  wdr
 		.vts_def = 0x8CA,
-		.mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE,
+		.mipi_wdr_mode = MIPI_WDR_MODE_NONE,
 		.max_fps = {
 			.numerator = 10000,
 			.denominator = 300000,
@@ -264,6 +264,21 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int enum_frame_interval(struct v4l2_subdev *sd,
+			      struct v4l2_subdev_pad_config *cfg,
+			      struct v4l2_subdev_frame_interval_enum *fie)
+{
+	struct imx412 *imx412 = to_imx412(sd);
+
+	fie->width  = imx412->cur_mode->width;
+	fie->height = imx412->cur_mode->height;
+
+	fie->interval.numerator   = imx412->cur_mode->max_fps.numerator;
+	fie->interval.denominator = imx412->cur_mode->max_fps.denominator;
+
+	return 0;
+}
+
 static int enum_frame_size(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_frame_size_enum *fse)
@@ -358,7 +373,7 @@ static int start_streaming(struct imx412 *imx412)
 	const sns_sync_info_t *sync_info;
 	int ret;
 
-	if (imx412->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+	if (imx412->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
 		reg_list = &imx412->cur_mode->reg_list;
 	}
 
@@ -597,7 +612,7 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		int type = 0;
 
-		if (imx412->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+		if (imx412->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
 			type = IMX412_SNS_TYPE_SDR;
 		} else {//wdr
 			type = IMX412_SNS_TYPE_WDR;
@@ -636,7 +651,7 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		if (hdr_on)
 			dev_warn(&client->dev, "Not support HDR!\n");
 		else
-			imx412->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+			imx412->cur_mode->mipi_wdr_mode = MIPI_WDR_MODE_NONE;
 
 		imx412_update_link_menu(imx412);
 		break;
@@ -660,7 +675,6 @@ static long imx412_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static long imx412_compat_ioctl32(struct v4l2_subdev *sd,
 				   unsigned int cmd, unsigned long arg)
 {
-	void __user *up = compat_ptr(arg);
 	long ret;
 
 	switch (cmd) {
@@ -689,6 +703,7 @@ static const struct v4l2_subdev_pad_ops imx412_pad_ops = {
 	.get_fmt = get_pad_format,
 	.set_fmt = set_pad_format,
 	.enum_frame_size = enum_frame_size,
+	.enum_frame_interval = enum_frame_interval,
 	.get_mbus_config = g_mbus_config,
 };
 
@@ -911,12 +926,12 @@ static int imx412_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id imx412_of_match[] = {
-	{ .compatible = "v4l2,sensor0" },
-	{ .compatible = "v4l2,sensor1" },
-	{ .compatible = "v4l2,sensor2" },
-	{ .compatible = "v4l2,sensor3" },
-	{ .compatible = "v4l2,sensor4" },
-	{ .compatible = "v4l2,sensor5" },
+	{ .compatible = "cvitek,sensor0" },
+	{ .compatible = "cvitek,sensor1" },
+	{ .compatible = "cvitek,sensor2" },
+	{ .compatible = "cvitek,sensor3" },
+	{ .compatible = "cvitek,sensor4" },
+	{ .compatible = "cvitek,sensor5" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, imx412_of_match);

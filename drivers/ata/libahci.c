@@ -3,7 +3,7 @@
  *  libahci.c - Common AHCI SATA low-level routines
  *
  *  Maintained by:  Tejun Heo <tj@kernel.org>
- *    		    Please ALWAYS copy linux-ide@vger.kernel.org
+ *		    Please ALWAYS copy linux-ide@vger.kernel.org
  *		    on emails.
  *
  *  Copyright 2004-2005 Red Hat, Inc.
@@ -43,7 +43,7 @@ module_param_named(ignore_sss, ahci_ignore_sss, int, 0444);
 MODULE_PARM_DESC(ignore_sss, "Ignore staggered spinup flag (0=don't ignore, 1=ignore)");
 
 static int ahci_set_lpm(struct ata_link *link, enum ata_lpm_policy policy,
-			unsigned hints);
+			unsigned int hints);
 static ssize_t ahci_led_show(struct ata_port *ap, char *buf);
 static ssize_t ahci_led_store(struct ata_port *ap, const char *buf,
 			      size_t size);
@@ -603,7 +603,7 @@ static void ahci_restore_initial_config(struct ata_host *host)
 	(void) readl(mmio + HOST_PORTS_IMPL);	/* flush */
 }
 
-static unsigned ahci_scr_offset(struct ata_port *ap, unsigned int sc_reg)
+static unsigned int ahci_scr_offset(struct ata_port *ap, unsigned int sc_reg)
 {
 	static const int offset[] = {
 		[SCR_STATUS]		= PORT_SCR_STAT,
@@ -1784,7 +1784,7 @@ static void ahci_error_intr(struct ata_port *ap, u32 irq_stat)
 		active_ehi->err_mask |= AC_ERR_HSM;
 		active_ehi->action |= ATA_EH_RESET;
 		ata_ehi_push_desc(active_ehi,
-				  "unknown FIS %08x %08x %08x %08x" ,
+				  "unknown FIS %08x %08x %08x %08x",
 				  unk[0], unk[1], unk[2], unk[3]);
 	}
 
@@ -1879,6 +1879,7 @@ static void ahci_handle_port_interrupt(struct ata_port *ap,
 			else {
 				const __le32 *f = pp->rx_fis + RX_FIS_SDB;
 				u32 f0 = le32_to_cpu(f[0]);
+
 				if (f0 & (1 << 15))
 					sata_async_notification(ap);
 			}
@@ -2031,6 +2032,7 @@ unsigned int ahci_qc_issue(struct ata_queued_cmd *qc)
 
 	if (pp->fbs_enabled && pp->fbs_last_dev != qc->dev->link->pmp) {
 		u32 fbs = readl(port_mmio + PORT_FBS);
+
 		fbs &= ~(PORT_FBS_DEV_MASK | PORT_FBS_DEC);
 		fbs |= qc->dev->link->pmp << PORT_FBS_DEV_OFFSET;
 		writel(fbs, port_mmio + PORT_FBS);
@@ -2374,6 +2376,7 @@ static int ahci_port_start(struct ata_port *ap)
 	if ((hpriv->cap & HOST_CAP_FBS) && sata_pmp_supported(ap)) {
 		void __iomem *port_mmio = ahci_port_base(ap);
 		u32 cmd = readl(port_mmio + PORT_CMD);
+
 		if (cmd & PORT_CMD_FBSCP)
 			pp->fbs_supported = true;
 		else if (hpriv->flags & AHCI_HFLAG_YES_FBS) {
@@ -2616,7 +2619,7 @@ int ahci_host_activate(struct ata_host *host, struct scsi_host_template *sht)
 		if (hpriv->irq_handler &&
 		    hpriv->irq_handler != ahci_single_level_irq_intr)
 			dev_warn(host->dev,
-			         "both AHCI_HFLAG_MULTI_MSI flag set and custom irq handler implemented\n");
+				 "both AHCI_HFLAG_MULTI_MSI flag set and custom irq handler implemented\n");
 		if (!hpriv->get_irq_vector) {
 			dev_err(host->dev,
 				"AHCI_HFLAG_MULTI_MSI requires ->get_irq_vector!\n");

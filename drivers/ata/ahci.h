@@ -3,7 +3,7 @@
  *  ahci.h - Common AHCI SATA definitions and declarations
  *
  *  Maintained by:  Tejun Heo <tj@kernel.org>
- *    		    Please ALWAYS copy linux-ide@vger.kernel.org
+ *		    Please ALWAYS copy linux-ide@vger.kernel.org
  *		    on emails.
  *
  *  Copyright 2004-2005 Red Hat, Inc.
@@ -220,8 +220,8 @@ enum {
 	AHCI_HFLAG_NO_FPDMA_AA		= (1 << 13), /* no FPDMA AA */
 	AHCI_HFLAG_YES_FBS		= (1 << 14), /* force FBS cap on */
 	AHCI_HFLAG_DELAY_ENGINE		= (1 << 15), /* do not start engine on
-						        port start (wait until
-						        error-handling stage) */
+							port start (wait until
+							error-handling stage) */
 	AHCI_HFLAG_NO_DEVSLP		= (1 << 17), /* no device sleep */
 	AHCI_HFLAG_NO_FBS		= (1 << 18), /* no FBS */
 
@@ -312,7 +312,7 @@ struct ahci_port_priv {
 	unsigned int		ncq_saw_dmas:1;
 	unsigned int		ncq_saw_sdb:1;
 	spinlock_t		lock;		/* protects parent ata_port */
-	u32 			intr_mask;	/* interrupts to enable */
+	u32			intr_mask;	/* interrupts to enable */
 	bool			fbs_supported;	/* set iff FBS is supported */
 	bool			fbs_enabled;	/* set iff FBS is enabled */
 	int			fbs_last_dev;	/* save FBS.DEV of last FIS */
@@ -327,7 +327,7 @@ struct ahci_host_priv {
 	u32			force_port_map;	/* force port map */
 	u32			mask_port_map;	/* mask out particular bits */
 
-	void __iomem *		mmio;		/* bus-independent mem map */
+	void __iomem            *mmio;		/* bus-independent mem map */
 	u32			cap;		/* cap to use */
 	u32			cap2;		/* cap2 to use */
 	u32			version;	/* cached version */
@@ -335,7 +335,7 @@ struct ahci_host_priv {
 	u32			saved_cap;	/* saved initial cap */
 	u32			saved_cap2;	/* saved initial cap2 */
 	u32			saved_port_map;	/* saved initial port_map */
-	u32 			em_loc; /* enclosure management location */
+	u32			em_loc;		/* enclosure management location */
 	u32			em_buf_sz;	/* EM buffer size in byte */
 	u32			em_msg_type;	/* EM message type */
 	u32			remapped_nvme;	/* NVMe remapped device count */
@@ -350,7 +350,7 @@ struct ahci_host_priv {
 	 * the PHY position in this array.
 	 */
 	struct phy		**phys;
-	unsigned		nports;		/* Number of ports */
+	unsigned int		nports;		/* Number of ports */
 	void			*plat_data;	/* Other platform data */
 	unsigned int		irq;		/* interrupt line */
 	/*
@@ -366,7 +366,7 @@ struct ahci_host_priv {
 	 */
 	int			(*stop_engine)(struct ata_port *ap);
 
-	irqreturn_t 		(*irq_handler)(int irq, void *dev_instance);
+	irqreturn_t		(*irq_handler)(int irq, void *dev_instance);
 
 	/* only required for per-port MSI(-X) support */
 	int			(*get_irq_vector)(struct ata_host *host,

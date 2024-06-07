@@ -27,9 +27,11 @@ static int cv1835_pdm_codec_init(struct snd_soc_pcm_runtime *rtd)
 {
 	return 0;
 }
+
 static struct snd_soc_ops cv1835_pdm_ops = {
 	.hw_params = cv1835_pdm_hw_params,
 };
+
 static struct snd_soc_dai_link_component cv1835_pdm_cpus = {
 	.name = "29120000.i2s",
 	.dai_name = "29120000.i2s",
@@ -47,6 +49,7 @@ static struct snd_soc_dai_link_component cv1835_pdm_platform = {
 	.dai_name = "29120000.i2s",
 
 };
+
 static struct snd_soc_dai_link cv1835_pdm_dai = {
 	.name = "cv1835-i2s-1",
 	.stream_name = "cv1835-pdm",
@@ -63,14 +66,12 @@ static struct snd_soc_dai_link cv1835_pdm_dai = {
 	| SND_SOC_DAIFMT_CBM_CFM,
 };
 
-
 static struct snd_soc_card cv1835_pdm = {
 	.owner = THIS_MODULE,
 	.dai_link = &cv1835_pdm_dai,
 	.num_links = 1,
 
 };
-
 
 static const struct of_device_id cvi_audio_match_ids[] = {
 	{
