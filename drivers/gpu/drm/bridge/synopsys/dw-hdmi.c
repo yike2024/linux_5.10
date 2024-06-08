@@ -228,7 +228,6 @@ struct dw_hdmi {
 	enum drm_connector_status last_connector_result;
 
 	bool is_se9;
-	bool hpd_polarity_inv; // true: for inversed polarity; false: for normal polarity
 };
 
 #define HDMI_IH_PHY_STAT0_RX_SENSE \
@@ -1634,10 +1633,6 @@ static void dw_hdmi_phy_disable(struct dw_hdmi *hdmi, void *data)
 enum drm_connector_status dw_hdmi_phy_read_hpd(struct dw_hdmi *hdmi,
 					       void *data)
 {
-	if (hdmi->hpd_polarity_inv)
-		return hdmi_readb(hdmi, HDMI_PHY_STAT0) & HDMI_PHY_HPD ?
-			connector_status_disconnected : connector_status_connected;
-
 	return hdmi_readb(hdmi, HDMI_PHY_STAT0) & HDMI_PHY_HPD ?
 		connector_status_connected : connector_status_disconnected;
 }
@@ -1664,10 +1659,7 @@ void dw_hdmi_phy_setup_hpd(struct dw_hdmi *hdmi, void *data)
 	 * Configure the PHY RX SENSE and HPD interrupts polarities and clear
 	 * any pending interrupt.
 	 */
-	if (hdmi->hpd_polarity_inv)
-		hdmi_writeb(hdmi, HDMI_PHY_RX_SENSE, HDMI_PHY_POL0);
-	else
-		hdmi_writeb(hdmi, HDMI_PHY_HPD | HDMI_PHY_RX_SENSE, HDMI_PHY_POL0);
+	hdmi_writeb(hdmi, HDMI_PHY_HPD | HDMI_PHY_RX_SENSE, HDMI_PHY_POL0);
 	hdmi_writeb(hdmi, HDMI_IH_PHY_STAT0_HPD | HDMI_IH_PHY_STAT0_RX_SENSE,
 		    HDMI_IH_PHY_STAT0);
 
@@ -2910,30 +2902,6 @@ dw_hdmi_bridge_mode_valid(struct drm_bridge *bridge,
 	if (mode->flags & DRM_MODE_FLAG_DBLCLK)
 		return MODE_BAD;
 
-	/* We don't support interlace modes */
-	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
-		return MODE_BAD;
-
-	if (mode->hdisplay > 4096 || mode->vdisplay > 2160)
-		return MODE_BAD;
-
-	if (((mode->hdisplay == 4096 || mode->hdisplay == 3840) &&
-		mode->vdisplay == 2160) && drm_mode_vrefresh(mode) > 60)
-		return MODE_BAD;
-
-	if (((mode->hdisplay == 4096 || mode->hdisplay == 3840) &&
-		mode->vdisplay == 2160 && drm_mode_vrefresh(mode) == 60 &&
-		mode->clock != 594000))
-		return MODE_BAD;
-
-	if ((mode->hdisplay == 2560 && mode->vdisplay == 1440 &&
-		drm_mode_vrefresh(mode) == 60 && mode->clock != 241500))
-		return MODE_BAD;
-
-	if ((mode->hdisplay == 1920 && mode->vdisplay == 1080 &&
-		drm_mode_vrefresh(mode) == 60 && mode->clock != 148500))
-		return MODE_BAD;
-
 	if (pdata->mode_valid)
 		mode_status = pdata->mode_valid(hdmi, pdata->priv_data, info,
 						mode);
@@ -3119,34 +3087,21 @@ static irqreturn_t dw_hdmi_irq(int irq, void *dev_id)
 	 */
 	if (intr_stat &
 	    (HDMI_IH_PHY_STAT0_RX_SENSE | HDMI_IH_PHY_STAT0_HPD)) {
-			dw_hdmi_setup_rx_sense(hdmi, hdmi->hpd_polarity_inv ?
-							~(phy_stat & HDMI_PHY_HPD) : (phy_stat & HDMI_PHY_HPD),
-					       phy_stat & HDMI_PHY_RX_SENSE);
+		dw_hdmi_setup_rx_sense(hdmi,
+				       phy_stat & HDMI_PHY_HPD,
+				       phy_stat & HDMI_PHY_RX_SENSE);
 
-			bool cec_stat;
-			if(hdmi->hpd_polarity_inv)
-				cec_stat = (((phy_stat & HDMI_PHY_RX_SENSE) == 0)
-							&& ((phy_stat & HDMI_PHY_HPD) == 0x2));
-			else
-				cec_stat = ((phy_stat & (HDMI_PHY_RX_SENSE | HDMI_PHY_HPD)) == 0);
-
-			if (cec_stat) {
-				mutex_lock(&hdmi->cec_notifier_mutex);
-				cec_notifier_phys_addr_invalidate(hdmi->cec_notifier);
-				mutex_unlock(&hdmi->cec_notifier_mutex);
-			}
+		if ((phy_stat & (HDMI_PHY_RX_SENSE | HDMI_PHY_HPD)) == 0) {
+			mutex_lock(&hdmi->cec_notifier_mutex);
+			cec_notifier_phys_addr_invalidate(hdmi->cec_notifier);
+			mutex_unlock(&hdmi->cec_notifier_mutex);
+		}
 	}
 
 	if (intr_stat & HDMI_IH_PHY_STAT0_HPD) {
-		enum drm_connector_status status;
-		if (hdmi->hpd_polarity_inv)
-			status = phy_int_pol & HDMI_PHY_HPD
-							? connector_status_disconnected
-							: connector_status_connected;
-		else
-			status = phy_int_pol & HDMI_PHY_HPD
-							? connector_status_connected
-							: connector_status_disconnected;
+		enum drm_connector_status status = phy_int_pol & HDMI_PHY_HPD
+						 ? connector_status_connected
+						 : connector_status_disconnected;
 
 		dev_dbg(hdmi->dev, "EVENT=%s\n",
 			status == connector_status_connected ?
@@ -3314,8 +3269,7 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 	struct dw_hdmi_cec_data cec;
 	struct dw_hdmi *hdmi;
 	struct resource *iores = NULL;
-	const char *se9_flag;
-	const char *hpd_ply;
+	const char* se9_flag;
 	const char str[] = "SE9";
 	int irq;
 	int ret;
@@ -3337,7 +3291,6 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 	hdmi->phy_mask = (u8)~(HDMI_PHY_HPD | HDMI_PHY_RX_SENSE);
 	hdmi->mc_clkdis = 0x7f;
 	hdmi->last_connector_result = connector_status_disconnected;
-	hdmi->hpd_polarity_inv = false;
 
 	mutex_init(&hdmi->mutex);
 	mutex_init(&hdmi->audio_mutex);
@@ -3396,15 +3349,6 @@ struct dw_hdmi *dw_hdmi_probe(struct platform_device *pdev,
 		} else {
 			hdmi->is_se9 = false;
 		}
-
-		// default normal hpd polarity
-		hdmi->hpd_polarity_inv = false;
-		hpd_ply = of_get_property(np, "hpd_polarity", NULL);
-		if (strcmp(hpd_ply, "inversed") == 0) {
-			pr_info("Using inversed hpd polarity!\n");
-			hdmi->hpd_polarity_inv = true;
-		}
-
 	} else {
 		hdmi->regm = plat_data->regm;
 	}

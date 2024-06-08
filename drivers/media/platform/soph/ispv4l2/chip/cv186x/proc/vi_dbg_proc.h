@@ -7,9 +7,9 @@
 
 #include <vi_defines.h>
 
-extern struct sop_vi_ctx *g_vi_ctx;
+extern struct cvi_vi_ctx *gViCtx;
 
-int vi_dbg_proc_init(struct sop_vi_dev *_vdev);
+int vi_dbg_proc_init(struct cvi_vi_dev *_vdev);
 int vi_dbg_proc_remove(void);
 
 #ifdef __cplusplus

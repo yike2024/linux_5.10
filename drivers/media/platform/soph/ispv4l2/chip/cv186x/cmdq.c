@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: BSD
 #ifdef ENV_CVITEST
 #include <common.h>
 #include <stdbool.h>
@@ -35,10 +34,10 @@
 #define REG_CMDQ_DUMMY      0x3c
 
 /**
- * cmdq_set_package  - package reg_write to cmd_set.
+ * cmdQ_set_package  - package reg_write to cmd_set.
  *
  */
-void cmdq_set_package(struct cmdq_set_reg *set, u32 addr, u32 data)
+void cmdQ_set_package(struct cmdq_set_reg *set, u32 addr, u32 data)
 {
 	set->data = data;
 	set->addr = addr >> 2;	// addr[19:2]
@@ -51,7 +50,7 @@ void cmdq_set_package(struct cmdq_set_reg *set, u32 addr, u32 data)
 }
 
 /**
- * cmdq_set_wait  - package wait_timer/wait to cmd_set.
+ * cmdQ_set_wait  - package wait_timer/wait to cmd_set.
  *
  * @param set: the set to modify
  * @param is_timer: 1: wait_timer, 0: wait_flag
@@ -59,7 +58,7 @@ void cmdq_set_package(struct cmdq_set_reg *set, u32 addr, u32 data)
  *		counter if timer and flag_num if flag
  * @param intr: the interrupt condition
  */
-void cmdq_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr)
+void cmdQ_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr)
 {
 	if (is_timer) {
 		struct cmdq_set_wait_timer *wait = &(set->wait_timer);
@@ -81,7 +80,7 @@ void cmdq_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr)
 }
 
 /**
- * cmdq_adma_package  - package adma entries.
+ * cmdQ_adma_package  - package adma entries.
  *
  * @param item: adma entry to modify
  * @param addr: address of link/cmd_set
@@ -89,7 +88,7 @@ void cmdq_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr)
  * @param is_link: 1: link descriptor, 2: cmd_set
  * @param is_end: true if this is last entry in adma-table.
  */
-void cmdq_adma_package(struct cmdq_adma *item, u64 addr, u32 size,
+void cmdQ_adma_package(struct cmdq_adma *item, u64 addr, u32 size,
 		bool is_link, bool is_end)
 {
 	item->addr = addr;
@@ -99,41 +98,41 @@ void cmdq_adma_package(struct cmdq_adma *item, u64 addr, u32 size,
 }
 
 /**
- * cmdq_intr_ctrl - cmdQ's interrupt on(1)/off(0)
+ * cmdQ_intr_ctrl - cmdQ's interrupt on(1)/off(0)
  *                 bit0: cmdQ intr, bit1: cmdQ end, bit2: cmdQ wait
  *
  * @param intr_mask: On/Off ctrl of the interrupt.
  */
-void cmdq_intr_ctrl(uintptr_t base, u8 intr_mask)
+void cmdQ_intr_ctrl(uintptr_t base, u8 intr_mask)
 {
 	_reg_write(base + REG_CMDQ_INT_EN, intr_mask);
 }
 
 /**
- * cmdq_intr_ctrl - clear cmdQ's interrupt
+ * cmdQ_intr_ctrl - clear cmdQ's interrupt
  *                 bit0: cmdQ intr, bit1: cmdQ end, bit2: cmdQ wait
  *
  * @param base: base-address of cmdQ
  * @param intr_mask: the mask of the interrupt to clear.
  */
-void cmdq_intr_clr(uintptr_t base, u8 intr_mask)
+void cmdQ_intr_clr(uintptr_t base, u8 intr_mask)
 {
 	_reg_write(base + REG_CMDQ_INT_EVENT, intr_mask);
 }
 
 /**
- * cmdq_intr_status - cmdQ's interrupt status
+ * cmdQ_intr_status - cmdQ's interrupt status
  *                 bit0: cmdQ intr, bit1: cmdQ end, bit2: cmdQ wait
  *
  * @param base: base-address of cmdQ
  */
-u8 cmdq_intr_status(uintptr_t base)
+u8 cmdQ_intr_status(uintptr_t base)
 {
 	return _reg_read(base + REG_CMDQ_INT_EVENT);
 }
 
 /**
- * cmdq_engine - start cmdQ
+ * cmdQ_engine - start cmdQ
  *
  * @param base: base-address of cmdQ
  * @param tbl_addr: adma/cmd_set table's address (32-byte alignment)
@@ -142,7 +141,7 @@ u8 cmdq_intr_status(uintptr_t base)
  * @param is_adma: 1 if adma table is used.
  * @param cnt: the number of entry in cmdset. only useful if not adma
  */
-void cmdq_engine(uintptr_t base, uintptr_t tbl_addr, u16 apb_base,
+void cmdQ_engine(uintptr_t base, uintptr_t tbl_addr, u16 apb_base,
 		bool is_hw_restart, bool is_adma, u16 cnt)
 {
 	u8 job_ctl = (is_hw_restart) ? 0x05 : 0x01;
@@ -170,16 +169,16 @@ void cmdq_engine(uintptr_t base, uintptr_t tbl_addr, u16 apb_base,
 }
 
 /**
- * cmdq_sw_restart - toggle sw_restart if cmdQ wait-flag is sw-toggle.
+ * cmdQ_sw_restart - toggle sw_restart if cmdQ wait-flag is sw-toggle.
  *
  * @param base: base-address of cmdQ
  */
-void cmdq_sw_restart(uintptr_t base)
+void cmdQ_sw_restart(uintptr_t base)
 {
 	_reg_write(base + REG_CMDQ_JOB_CTL, 0x02);
 }
 
-bool cmdq_is_sw_restart(uintptr_t base)
+bool cmdQ_is_sw_restart(uintptr_t base)
 {
 	return (_reg_read(base + REG_CMDQ_JOB_CTL) & 0x04) ? false : true;
 }

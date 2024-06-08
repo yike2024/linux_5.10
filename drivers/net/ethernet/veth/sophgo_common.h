@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef _SOPHGO_COMMON_H_
 #define _SOPHGO_COMMON_H_
 

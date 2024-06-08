@@ -4,6 +4,7 @@
 #ifndef _CV1835_I2S_SUBSYS_H_
 #define _CV1835_I2S_SUBSYS_H_
 
+
 //dw_i2s
 #define DWI2S_MODE_REG_VAL 0xf0
 #define DWI2S_CLK_CTRL0_VAL 0x140

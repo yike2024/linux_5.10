@@ -55,12 +55,11 @@ int sophgo_phy_init(void)
 		return -1;
 	}
 	reg = readl(axi_base + 0x40);
-	reg &= ~(0x1 << 2);
+	reg &=~(0x1 << 2);
 	writel(reg, axi_base + 0x40);
 	iounmap(axi_base);
 
 	void __iomem *top_base = NULL;
-
 	top_base = ioremap(SSPERI_TOP_REG_BASE, 0x4f0);
 	if (top_base == NULL) {
 		pr_info("ioremap failed!\n");
@@ -70,25 +69,25 @@ int sophgo_phy_init(void)
 	/* set pipe for sata and pcie both enable */
 	reg = readl(top_base + 0x44);
 	/* pipe mode set for sata */
-	reg &= ~(0x3);
+	reg &=~(0x3);
 	reg |= (0x2);
 	writel(reg, top_base + 0x44);
 
 	/* set phy protocol for sata operation */
 	reg = readl(top_base + 0x278);
-	reg &= ~(0x3);
+	reg &=~(0x3);
 	reg |= 0x2;
 	writel(reg, top_base + 0x278);
 
 	/* phy lane0 rx_term_acdc control bit */
 	reg = readl(top_base + 0x48);
-	reg &= ~(0x3);
+	reg &=~(0x3);
 	reg |= 0x2;
 	writel(reg, top_base + 0x48);
 
 	/* phy vph for 1.8v */
 	reg = readl(top_base + 0x34);
-	reg &= ~(0x7);
+	reg &=~(0x7);
 	reg |= 0x7;
 	writel(reg, top_base + 0x34);
 
@@ -122,7 +121,7 @@ int sophgo_phy_init(void)
 	while (!(readl(top_base + 0x4b8) & 0x20)) {
 		if (timeout-- > 0) {
 			mdelay(1);
-		} else {
+		} else {	
 			pr_info("phy sram init timeout");
 			return -1;
 			//break;

@@ -5,6 +5,7 @@
 
 	Copyright(C) 2007-2011 STMicroelectronics Ltd
 
+
   Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
 
   Documentation available at:

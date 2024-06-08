@@ -128,11 +128,10 @@ int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
 int __i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
 
 /* This is the very generalized SMBus access routine. You probably do not
- * want to use this, though; one of the functions below may be much easier,
- * and probably just as fast.
- * Note that we use i2c_adapter here, because you do not need a specific
- * smbus adapter to call this function.
- */
+   want to use this, though; one of the functions below may be much easier,
+   and probably just as fast.
+   Note that we use i2c_adapter here, because you do not need a specific
+   smbus adapter to call this function. */
 s32 i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
 		   unsigned short flags, char read_write, u8 command,
 		   int protocol, union i2c_smbus_data *data);
@@ -143,8 +142,7 @@ s32 __i2c_smbus_xfer(struct i2c_adapter *adapter, u16 addr,
 		     int protocol, union i2c_smbus_data *data);
 
 /* Now follow the 'nice' access routines. These also document the calling
- * conventions of i2c_smbus_xfer.
- */
+   conventions of i2c_smbus_xfer. */
 
 s32 i2c_smbus_read_byte(const struct i2c_client *client);
 s32 i2c_smbus_write_byte(const struct i2c_client *client, u8 value);
@@ -347,7 +345,6 @@ const struct i2c_device_id *i2c_match_id(const struct i2c_device_id *id,
 static inline struct i2c_client *kobj_to_i2c_client(struct kobject *kobj)
 {
 	struct device * const dev = kobj_to_dev(kobj);
-
 	return to_i2c_client(dev);
 }
 
@@ -483,11 +480,11 @@ void i2c_unregister_device(struct i2c_client *client);
 #ifdef CONFIG_I2C_BOARDINFO
 int
 i2c_register_board_info(int busnum, struct i2c_board_info const *info,
-			unsigned int n);
+			unsigned n);
 #else
 static inline int
 i2c_register_board_info(int busnum, struct i2c_board_info const *info,
-			unsigned int n)
+			unsigned n)
 {
 	return 0;
 }
@@ -866,8 +863,7 @@ static inline bool i2c_client_has_driver(struct i2c_client *client)
 }
 
 /* call the i2c_client->command() of all attached clients with
- * the given arguments
- */
+ * the given arguments */
 void i2c_clients_command(struct i2c_adapter *adap,
 			 unsigned int cmd, void *arg);
 

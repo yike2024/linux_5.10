@@ -46,7 +46,7 @@
 #include <asm/system_misc.h>
 #include <asm/sysreg.h>
 
-static const char *handler[] = {
+static const char *handler[]= {
 	"Synchronous Abort",
 	"IRQ",
 	"FIQ",
@@ -313,14 +313,12 @@ static int call_undef_hook(struct pt_regs *regs)
 
 	if (!user_mode(regs)) {
 		__le32 instr_le;
-
 		if (get_kernel_nofault(instr_le, (__force __le32 *)pc))
 			goto exit;
 		instr = le32_to_cpu(instr_le);
 	} else if (compat_thumb_mode(regs)) {
 		/* 16-bit Thumb instruction */
 		__le16 instr_le;
-
 		if (get_user(instr_le, (__le16 __user *)pc))
 			goto exit;
 		instr = le16_to_cpu(instr_le);
@@ -335,7 +333,6 @@ static int call_undef_hook(struct pt_regs *regs)
 	} else {
 		/* 32-bit ARM instruction */
 		__le32 instr_le;
-
 		if (get_user(instr_le, (__le32 __user *)pc))
 			goto exit;
 		instr = le32_to_cpu(instr_le);

@@ -139,24 +139,23 @@ static int c_show(struct seq_file *m, void *v)
 	int i, j;
 	int opt_cpu;
 	bool compat = personality(current->personality) == PER_LINUX;
-
 	opt_cpu = readl(ioremap(0x27102014, 4));
 
 	for_each_online_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
-
 		u32 midr = cpuinfo->reg_midr;
-		/*
+        /*
 		 * glibc reads /proc/cpuinfo to determine the number of
 		 * online processors, looking for lines beginning with
 		 * "processor".  Give glibc what it expects.
 		 */
 		seq_printf(m, "processor\t: %d\n", i);
 		if (compat) {
-			if (opt_cpu == 0)
+			if (opt_cpu == 0) {
 				seq_printf(m, "model name\t: %s\n", "bm1688");
-			else
+			} else {
 				seq_printf(m, "model name\t: %s\n", "cv186ah");
+			}
 		}
 
 		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
@@ -198,10 +197,11 @@ static int c_show(struct seq_file *m, void *v)
 
 		seq_printf(m, "CPU implementer\t: 0x%02x\n",
 			   MIDR_IMPLEMENTOR(midr));
-		if (opt_cpu == 0)
+		if (opt_cpu == 0) {
 			seq_printf(m, "CPU architecture: 8\n");
-		else
+		} else {
 			seq_printf(m, "CPU architecture: 6\n");
+		}
 		seq_printf(m, "CPU variant\t: 0x%x\n", MIDR_VARIANT(midr));
 		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
@@ -417,7 +417,6 @@ static void __cpuinfo_store_cpu(struct cpuinfo_arm64 *info)
 void cpuinfo_store_cpu(void)
 {
 	struct cpuinfo_arm64 *info = this_cpu_ptr(&cpu_data);
-
 	__cpuinfo_store_cpu(info);
 	update_cpu_features(smp_processor_id(), info, &boot_cpu_data);
 }
@@ -425,7 +424,6 @@ void cpuinfo_store_cpu(void)
 void __init cpuinfo_store_boot_cpu(void)
 {
 	struct cpuinfo_arm64 *info = &per_cpu(cpu_data, 0);
-
 	__cpuinfo_store_cpu(info);
 
 	boot_cpu_data = *info;

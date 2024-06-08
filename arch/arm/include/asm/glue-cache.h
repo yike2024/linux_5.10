@@ -25,8 +25,8 @@
 #endif
 
 #if defined(CONFIG_CPU_ARM920T) || defined(CONFIG_CPU_ARM922T) || \
-	defined(CONFIG_CPU_ARM925T) || defined(CONFIG_CPU_ARM1020) || \
-	defined(CONFIG_CPU_ARM1026)
+    defined(CONFIG_CPU_ARM925T) || defined(CONFIG_CPU_ARM1020) || \
+    defined(CONFIG_CPU_ARM1026)
 # define MULTI_CACHE 1
 #endif
 
@@ -146,16 +146,16 @@ static inline void nop_dma_unmap_area(const void *s, size_t l, int f) { }
 #endif
 
 #ifndef MULTI_CACHE
-#define __cpuc_flush_icache_all		__glue(_CACHE, _flush_icache_all)
-#define __cpuc_flush_kern_all		__glue(_CACHE, _flush_kern_cache_all)
-#define __cpuc_flush_kern_louis		__glue(_CACHE, _flush_kern_cache_louis)
-#define __cpuc_flush_user_all		__glue(_CACHE, _flush_user_cache_all)
-#define __cpuc_flush_user_range		__glue(_CACHE, _flush_user_cache_range)
-#define __cpuc_coherent_kern_range	__glue(_CACHE, _coherent_kern_range)
-#define __cpuc_coherent_user_range	__glue(_CACHE, _coherent_user_range)
-#define __cpuc_flush_dcache_area	__glue(_CACHE, _flush_kern_dcache_area)
+#define __cpuc_flush_icache_all		__glue(_CACHE,_flush_icache_all)
+#define __cpuc_flush_kern_all		__glue(_CACHE,_flush_kern_cache_all)
+#define __cpuc_flush_kern_louis		__glue(_CACHE,_flush_kern_cache_louis)
+#define __cpuc_flush_user_all		__glue(_CACHE,_flush_user_cache_all)
+#define __cpuc_flush_user_range		__glue(_CACHE,_flush_user_cache_range)
+#define __cpuc_coherent_kern_range	__glue(_CACHE,_coherent_kern_range)
+#define __cpuc_coherent_user_range	__glue(_CACHE,_coherent_user_range)
+#define __cpuc_flush_dcache_area	__glue(_CACHE,_flush_kern_dcache_area)
 
-#define dmac_flush_range		__glue(_CACHE, _dma_flush_range)
+#define dmac_flush_range		__glue(_CACHE,_dma_flush_range)
 #define dmac_map_area           __glue(_CACHE, _dma_map_area)
 #define dmac_unmap_area         __glue(_CACHE, _dma_unmap_area)
 

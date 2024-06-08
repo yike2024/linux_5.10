@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: BSD
 #include <vi.h>
 #include <proc/vi_dbg_proc.h>
 #include <proc/vi_proc.h>
@@ -6,11 +5,13 @@
 #include <vip/vi_perf_chk.h>
 #include <vi_ext.h>
 
-#include <linux/comm_buffer.h>
+#include <linux/cvi_buffer.h>
 #include <linux/dma-buf.h>
 #include <linux/dma-mapping.h>
 #include <asm/cacheflush.h>
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
 #include <linux/dma-map-ops.h>
+#endif
 
 #define VI_MEM_BM_ION
 
@@ -19,7 +20,7 @@
 #include "ion/cvitek/cvitek_ion_alloc.h"
 #endif
 
-#include <linux/comm_cif.h>
+#include <linux/cif_uapi.h>
 #include <linux/sns_v4l2_uapi.h>
 #include "vi_sys.h"
 #include "cmdq.h"
@@ -44,10 +45,7 @@
 	} while (0)
 
 #define VI_PROFILE
-#define VI_MAX_LIST_NUM		(0x80)
-#define VI_CMDQ_BUF_SIZE	(0x20000)
-#define VI_DDR_RETRAIN_REG	(0x281000f4)
-#define VIP_ALIGNMENT 0x40
+#define VI_MAX_LIST_NUM	(0x80)
 
 /* In practical application, it is necessary to drop the frame of AE convergence process.
  * But in vi-vpss online & vpss-vc sbm scenario, there is no way to drop the frame.
@@ -69,11 +67,11 @@ static int count;
 module_param(stop_stream_en, int, 0644);
 #endif
 
-struct sop_vi_ctx *g_vi_ctx;
-static struct sop_vi_dev *g_videv;
-struct overflow_info *g_overflow_info;
+struct cvi_vi_ctx *gViCtx;
+static struct cvi_vi_dev *gvidev;
+struct cvi_overflow_info *gOverflowInfo;
+extern uint8_t g_w_bit[ISP_PRERAW_MAX], g_h_bit[ISP_PRERAW_MAX];
 static uintptr_t sys_base_address;
-static int mmap_dma_fd;
 
 const char * const clk_sys_name[] = {
 	"clk_sys_0", "clk_sys_1", "clk_sys_2",
@@ -88,6 +86,8 @@ const char * const clk_mac_name[] = {
 	"clk_csi_mac_vi0", "clk_csi_mac_vi1"
 };
 
+#define VIP_ALIGNMENT 0x40
+#define VI_CMDQ_BUF_SIZE (0x20000)
 
 #define ISP_MAX_WIDTH  7680
 #define ISP_MAX_HEIGHT 4320
@@ -100,7 +100,7 @@ enum {
 	ISP_OUT_FMT_MAX,
 };
 
-static struct sop_vip_fmt vip_formats[] = {
+static struct cvi_vip_fmt cvi_vip_formats[ISP_OUT_FMT_MAX] = {
 	{
 	.fourcc      = V4L2_PIX_FMT_NV21,
 	.bit_depth   = { 8, 8, 0 },
@@ -120,30 +120,34 @@ static struct sop_vip_fmt vip_formats[] = {
 /*******************************************************git
  *  Internal APIs
  ******************************************************/
+
+#if (KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE)
 static void legacy_timer_emu_func(struct timer_list *t)
 {
 	struct legacy_timer_emu *lt = from_timer(lt, t, t);
 
 	lt->function(lt->data);
 }
+#endif //(KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE)
 
 static void check_size(u32 *width, u32 *height)
 {
 	if (*width > ISP_MAX_WIDTH || *height > ISP_MAX_HEIGHT
 		|| *width == 0 || *height == 0) {
-		vi_pr(VI_INFO, "size(%u*%u) is invalid! use default(%d*%d)\n",
-			*width, *height, ISP_DEFAULT_WIDTH, ISP_DEFAULT_HEIGHT);
+		vi_pr(VI_INFO, "size(%u*%u) is invalid! use default(640*480)\n",
+			*width, *height);
 		*width = ISP_DEFAULT_WIDTH;
 		*height = ISP_DEFAULT_HEIGHT;
 	}
 }
 
-static int vi_snsr_i2c_write(struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+static int vi_snsr_i2c_write(struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	struct isp_i2c_data *i2c)
 {
-	struct sop_isp_device *dev = container_of(vdev, struct sop_isp_device, vi_dev);
-	u8 chn_id = vi_get_dev_num_by_raw(&vdev->ctx, raw_num);
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
+	uint8_t chn_id = vi_get_dev_num_by_raw(&vdev->ctx, raw_num);
 	struct v4l2_subdev *sensor_sd = dev->sensors[chn_id].sd;
 	struct i2c_client *client = v4l2_get_subdevdata(sensor_sd);
 	struct i2c_adapter *adap;
@@ -188,9 +192,11 @@ static int vi_snsr_i2c_write(struct sop_vi_dev *vdev,
 				i2c->reg_addr, i2c->data);
 			break;
 		} else if (ret == -EAGAIN) {
-			dev_dbg(&client->dev, "retry 0x%x = 0x%x\n", i2c->reg_addr, i2c->data);
+			dev_dbg(&client->dev, "retry 0x%x = 0x%x\n",
+					i2c->reg_addr, i2c->data);
 		} else {
-			dev_err(&client->dev, "fail to send 0x%x,0x%x\n", i2c->reg_addr, i2c->data);
+			dev_err(&client->dev, "fail to send 0x%x, 0x%x, %d\n",
+						i2c->reg_addr, i2c->data, ret);
 		}
 	}
 
@@ -226,23 +232,23 @@ static struct mem_mapping vb2_buf_meminfo[MAX_VB2_BUF_NUM];
 static int vb2_buf_mem_index;
 
 void *v4l2_vb_dma_alloc(struct device *dev, size_t size,
-			dma_addr_t *dma_handle, gfp_t gfp, unsigned long attrs)
+		dma_addr_t *dma_handle, gfp_t gfp, unsigned long attrs)
 {
-	int dmabuf_fd = 0, ret = 0;
+	int32_t dmabuf_fd = 0, ret = 0;
 	struct dma_buf *dmabuf;
 	struct ion_buffer *ionbuf;
 	void *vmap_addr = NULL;
 	int index = 0;
 	struct mem_mapping *mem_info = NULL;
 	char name[16];
-	u8 *owner_name = NULL;
+	uint8_t *owner_name = NULL;
 
-	mutex_lock(&g_videv->v4l2_vb_lock);
+	mutex_lock(&gvidev->v4l2_vb_lock);
 	index = vb2_buf_mem_index++;
+	mutex_unlock(&gvidev->v4l2_vb_lock);
 
-	if (index > (MAX_VB2_BUF_NUM - 1)) {
+	if (index > MAX_VB2_BUF_NUM -1) {
 		vi_pr(VI_ERR, "vb2 buffer requset outof(%d)\n", MAX_VB2_BUF_NUM);
-		mutex_unlock(&g_videv->v4l2_vb_lock);
 		return NULL;
 	}
 	sprintf(name, "v4l2_vb_%02d", index);
@@ -253,14 +259,12 @@ void *v4l2_vb_dma_alloc(struct device *dev, size_t size,
 	dmabuf_fd = bm_ion_alloc(0x1, size, 1);
 	if (dmabuf_fd < 0) {
 		vi_pr(VI_INFO, "bm_ion_alloc len=0x%lx failed\n", size);
-		mutex_unlock(&g_videv->v4l2_vb_lock);
 		return NULL;
 	}
 
 	dmabuf = dma_buf_get(dmabuf_fd);
 	if (!dmabuf) {
 		vi_pr(VI_INFO, "allocated get dmabuf failed\n");
-		mutex_unlock(&g_videv->v4l2_vb_lock);
 		return NULL;
 	}
 
@@ -271,16 +275,14 @@ void *v4l2_vb_dma_alloc(struct device *dev, size_t size,
 
 	ret = dma_buf_begin_cpu_access(dmabuf, DMA_TO_DEVICE);
 	if (ret < 0) {
-		vi_pr(VI_INFO, "dma_buf_begin_cpu_access failed\n");
+		vi_pr(VI_INFO, "cvi_ion_alloc() dma_buf_begin_cpu_access failed\n");
 		dma_buf_put(dmabuf);
-		mutex_unlock(&g_videv->v4l2_vb_lock);
 		return NULL;
 	}
 
 	vmap_addr = ionbuf->vaddr;
 	if (IS_ERR(vmap_addr)) {
 		ret = -EINVAL;
-		mutex_unlock(&g_videv->v4l2_vb_lock);
 		return NULL;
 	}
 
@@ -297,22 +299,18 @@ void *v4l2_vb_dma_alloc(struct device *dev, size_t size,
 	vi_pr(VI_INFO, "dma_fd[%d]:%d alloc size:%ld, phy_addr:0x%llx\n",
 		index, dmabuf_fd, size, *dma_handle);
 
-	mutex_unlock(&g_videv->v4l2_vb_lock);
-
 	return vmap_addr;
 }
 
 void v4l2_vb_dma_free(struct device *dev, size_t size, void *vaddr,
-		      dma_addr_t dma_handle, unsigned long attrs)
+			dma_addr_t dma_handle, unsigned long attrs)
 {
 	struct mem_mapping *mem_info = NULL;
 	struct dma_buf *dmabuf;
 	struct ion_buffer *ionbuf;
-	int dmabuf_fd;
+	int32_t dmabuf_fd;
 	int index = 0;
 	int i;
-
-	mutex_lock(&g_videv->v4l2_vb_lock);
 
 	for (i = 0; i < MAX_VB2_BUF_NUM; i++) {
 		mem_info = &vb2_buf_meminfo[i];
@@ -327,7 +325,6 @@ void v4l2_vb_dma_free(struct device *dev, size_t size, void *vaddr,
 
 	if (i == MAX_VB2_BUF_NUM) {
 		vi_pr(VI_ERR, "no mem info match! (0x%llx)\n", dma_handle);
-		mutex_unlock(&g_videv->v4l2_vb_lock);
 		return;
 	}
 
@@ -343,30 +340,20 @@ void v4l2_vb_dma_free(struct device *dev, size_t size, void *vaddr,
 
 	memset(mem_info, 0, sizeof(struct mem_mapping));
 
+	mutex_lock(&gvidev->v4l2_vb_lock);
 	vb2_buf_mem_index--;
-
 	vi_pr(VI_INFO, "g_index:%d, dma_fd[%d]:%d\n", vb2_buf_mem_index, index, dmabuf_fd);
-
-	mutex_unlock(&g_videv->v4l2_vb_lock);
+	mutex_unlock(&gvidev->v4l2_vb_lock);
 }
 
 static int v4l2_vb_dma_mmap(struct device *dev, struct vm_area_struct *vma,
-			    void *cpu_addr, dma_addr_t dma_addr, size_t size, unsigned long attrs)
+			void *cpu_addr, dma_addr_t dma_addr, size_t size, unsigned long attrs)
 {
 	unsigned long vm_start = vma->vm_start;
 	unsigned int vm_size = vma->vm_end - vma->vm_start;
 	void *pos = phys_to_virt(dma_addr);
-	int i = 0;
 
-	for (i = 0; i < MAX_VB2_BUF_NUM; i++) {
-		if (vb2_buf_meminfo[i].phy_addr == dma_addr) {
-			mmap_dma_fd = vb2_buf_meminfo[i].dmabuf_fd;
-			break;
-		}
-	}
-
-	vi_pr(VI_DBG, "mmap size(%ld) vm_size(%d) phys(0x%llx) attr:%ld dma_fd:%d\n",
-	      size, vm_size, dma_addr, attrs, vb2_buf_meminfo[i].dmabuf_fd);
+	vi_pr(VI_DBG, "mmap size(%ld) vm_size(%d) phys(0x%llx)\n", size, vm_size, dma_addr);
 
 	while (vm_size > 0) {
 		if (remap_pfn_range(vma, vm_start, virt_to_pfn(pos), PAGE_SIZE, vma->vm_page_prot))
@@ -380,39 +367,44 @@ static int v4l2_vb_dma_mmap(struct device *dev, struct vm_area_struct *vma,
 }
 #endif
 
-int vi_ion_cache_invalidate(u64 addr_p, void *addr_v, u32 len)
+int32_t vi_ion_cache_invalidate(uint64_t addr_p, void *addr_v, uint32_t u32Len)
 {
-	__dma_map_area(phys_to_virt(addr_p), len, DMA_FROM_DEVICE);
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE) && defined(__riscv)
+	arch_sync_dma_for_device(addr_p, u32Len, DMA_FROM_DEVICE);
+#else
+	__dma_map_area(phys_to_virt(addr_p), u32Len, DMA_FROM_DEVICE);
+#endif
 
-	/*    */
+	/*	*/
 	smp_mb();
-
 	return 0;
 }
 
-int vi_ion_cache_flush(u64 addr_p, void *addr_v, u32 len)
+int32_t vi_ion_cache_flush(uint64_t addr_p, void *addr_v, uint32_t u32Len)
 {
-	__dma_map_area(phys_to_virt(addr_p), len, DMA_TO_DEVICE);
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE) && defined(__riscv)
+	arch_sync_dma_for_device(addr_p, u32Len, DMA_TO_DEVICE);
+#else
+	__dma_map_area(phys_to_virt(addr_p), u32Len, DMA_TO_DEVICE);
+#endif
 
-	/*    */
+	/*	*/
 	smp_mb();
-
 	return 0;
 }
 
-static int _vi_dma_alloc(struct sop_vi_dev *vdev,
-			     struct mem_mapping *mem_info,
-			     u64 *addr_p, u32 len,
-			     u32 is_cached, u8 *name)
+static int32_t _vi_dma_alloc(struct cvi_vi_dev *vdev,
+	struct mem_mapping *mem_info, uint64_t *addr_p,
+	uint32_t u32Len, uint32_t is_cached, uint8_t *name)
 {
 #ifdef VI_MEM_BM_ION
-	int dmabuf_fd = 0, ret = 0;
+	int32_t dmabuf_fd = 0, ret = 0;
 	struct dma_buf *dmabuf;
 	struct ion_buffer *ionbuf;
 	void *vmap_addr = NULL;
-	u32 size = PAGE_ALIGN(len);
-	u8 *owner_name = NULL;
-	u8 name_size = 32;
+	uint32_t size = PAGE_ALIGN(u32Len);
+	uint8_t *owner_name = NULL;
+	uint8_t name_size = 32;
 
 	//vpp heap
 	dmabuf_fd = bm_ion_alloc(0x1, size, is_cached);
@@ -438,7 +430,7 @@ static int _vi_dma_alloc(struct sop_vi_dev *vdev,
 
 	ret = dma_buf_begin_cpu_access(dmabuf, DMA_TO_DEVICE);
 	if (ret < 0) {
-		vi_pr(VI_INFO, "dma_buf_begin_cpu_access failed\n");
+		vi_pr(VI_INFO, "cvi_ion_alloc() dma_buf_begin_cpu_access failed\n");
 		dma_buf_put(dmabuf);
 		return ret;
 	}
@@ -462,14 +454,14 @@ static int _vi_dma_alloc(struct sop_vi_dev *vdev,
 #else
 	dma_addr_t dma_handle;
 	void *addr_v = NULL;
-	u32 size = PAGE_ALIGN(len);
+	uint32_t size = PAGE_ALIGN(u32Len);
 
-	if (len <= 0) {
-		vi_pr(VI_ERR, "illegal alloc size(%d) !!\n", len);
+	if (u32Len <= 0) {
+		vi_pr(VI_ERR, "illegal alloc size(%d) !!\n", u32Len);
 		return -1;
 	}
 
-	vi_pr(VI_INFO, "size:%d, align:%d\n", len, size);
+	vi_pr(VI_INFO, "size:%d, align:%d\n", u32Len, size);
 
 	addr_v = dma_alloc_coherent(vdev->dev, size,
 				&dma_handle, GFP_DMA | GFP_KERNEL);
@@ -493,7 +485,7 @@ static int _vi_dma_alloc(struct sop_vi_dev *vdev,
 	return 0;
 }
 
-static void _vi_dma_free(struct sop_vi_dev *videv, struct mem_mapping *mem_info)
+static void _vi_dma_free(struct cvi_vi_dev *videv, struct mem_mapping *mem_info)
 {
 #ifdef VI_MEM_BM_ION
 	struct dma_buf *dmabuf;
@@ -530,10 +522,10 @@ static void _vi_dma_free(struct sop_vi_dev *videv, struct mem_mapping *mem_info)
  * _mempool_ion_alloc -alloc memory for vi dma
  *
  */
-static int vi_mempool_alloc_ion(struct sop_vi_dev *videv)
+static int vi_mempool_alloc_ion(struct cvi_vi_dev *videv)
 {
-	int ret = 0;
-	u64 addr_p = 0;
+	int32_t ret = 0;
+	uint64_t addr_p = 0;
 	u32 size = 0;
 
 	vi_pr(VI_INFO, "+\n");
@@ -555,314 +547,11 @@ static int vi_mempool_alloc_ion(struct sop_vi_dev *videv)
 	return ret;
 }
 
-static void vi_mempool_free_ion(struct sop_vi_dev *videv)
+static void vi_mempool_free_ion(struct cvi_vi_dev *videv)
 {
 	_vi_dma_free(videv, &vi_dma_buf_info);
 	isp_mempool.base = 0;
 	isp_mempool.size = 0;
-}
-
-static int copy_vb2buf_to_dump(struct vb2_buffer *vb2_buf)
-{
-	u64 src_addr = 0;
-	void *src_vir = NULL;
-	void *dst_vir = NULL;
-
-	if (!vb2_buf) {
-		vi_pr(VI_ERR, "NULL vb2_buffer!\n");
-		return -1;
-	}
-
-	if (!yuv_dump_vb_info.phy_addr) {
-		vi_pr(VI_ERR, "yuv dump has not alloc yet!\n");
-		return -1;
-	}
-
-	src_addr = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
-	src_vir = phys_to_virt(src_addr);
-	dst_vir = phys_to_virt(yuv_dump_vb_info.phy_addr);
-
-	memcpy(dst_vir, src_vir, yuv_dump_vb_info.size);
-
-	return 0;
-}
-
-static int _vi_set_dev_bind_info(struct sop_vi_dev *videv, int vi_dev, u8 mac_num)
-{
-	struct isp_ctx *ctx = &videv->ctx;
-	u8 raw_num = 0;
-	int ret = -1;
-
-	if (mac_num >= VI_MAX_DEV_NUM) {
-		vi_pr(VI_ERR, "invalid mac(%d)\n", mac_num);
-		return ret;
-	}
-
-	raw_num = mac_num;
-
-	if (ctx->isp_bind_info[raw_num].is_bind && !ctx->isp_pipe_cfg[vi_dev].is_yuv_sensor) {
-		vi_pr(VI_ERR, "mac(%d) is binded before\n", mac_num);
-		return ret;
-	}
-
-	if (raw_num > ISP_PRERAW5) {
-		vi_pr(VI_ERR, "invalid bind mac(%d) from vi dev(%d)\n", mac_num, vi_dev);
-		return ret;
-	}
-
-	if (ctx->isp_pipe_cfg[vi_dev].is_yuv_sensor) {
-		ctx->isp_bind_info[vi_dev].is_bind = true;
-		ctx->isp_bind_info[vi_dev].bind_dev_num = vi_dev;
-	} else {
-		ctx->isp_bind_info[raw_num].is_bind = true;
-		ctx->isp_bind_info[raw_num].bind_dev_num = vi_dev;
-	}
-
-	vi_pr(VI_INFO, "dev(%d) bind to mac(%d)\n", vi_dev, mac_num);
-
-	return 0;
-}
-
-static inline int check_vi_pipe_valid(int pipe)
-{
-	if (pipe < 0 || pipe > (VI_MAX_PIPE_NUM - 1)) {
-		vi_pr(VI_ERR, "pipe num expect 0~%d, but now %d Caller is %p\n",
-			VI_MAX_PIPE_NUM - 1, pipe, __builtin_return_address(0));
-		return -1;
-	}
-
-	return 0;
-}
-
-int vi_get_pipe_frame(struct sop_vi_dev *videv, int vi_pipe,
-		      video_frame_info_s *frame_info, int milli_sec)
-{
-	int ret;
-	struct sop_vip_isp_raw_blk dump[2];
-	u32 blksize, dev_frm_w, dev_frm_h, frm_w, frm_h, raw_num;
-	u64 phyaddr = 0;
-	int dev_id = vi_pipe, frm_num = 1, i = 0;
-	struct vi_rect rawdump_crop;
-	struct isp_ctx *ctx = &videv->ctx;
-
-	ret = check_vi_pipe_valid(vi_pipe);
-	if (ret != 0)
-		return ret;
-
-	if (atomic_read(&videv->isp_streamoff) == 1) {
-		vi_pr(VI_ERR, "StartStream first\n");
-		return -1;
-	}
-
-	if (g_vi_ctx->dump_attr[vi_pipe].enable == 0) {
-		vi_pr(VI_ERR, "SetPipeDumpAttr first\n");
-		return -1;
-	}
-
-	if (g_vi_ctx->dump_attr[vi_pipe].dump_type == VI_DUMP_TYPE_YUV ||
-		g_vi_ctx->dump_attr[vi_pipe].dump_type == VI_DUMP_TYPE_IR) {
-		vi_pr(VI_ERR, "IR or yuv raw dump is not supported.\n");
-		return -1;
-	}
-
-	memset(dump, 0, sizeof(dump));
-	raw_num = vi_get_raw_num_by_dev(ctx, vi_pipe);
-	dump[0].raw_dump.raw_num = raw_num;
-
-	dev_frm_w = ctx->isp_pipe_cfg[raw_num].crop.w;
-	dev_frm_h = ctx->isp_pipe_cfg[raw_num].crop.h;
-
-	memset(&rawdump_crop, 0, sizeof(rawdump_crop));
-	if ((frame_info[0].video_frame.offset_top != 0) ||
-		(frame_info[0].video_frame.offset_bottom != 0) ||
-		(frame_info[0].video_frame.offset_left != 0) ||
-		(frame_info[0].video_frame.offset_right != 0)) {
-		rawdump_crop.x = frame_info[0].video_frame.offset_left;
-		rawdump_crop.y = frame_info[0].video_frame.offset_top;
-		rawdump_crop.w = dev_frm_w - rawdump_crop.x - frame_info[0].video_frame.offset_right;
-		rawdump_crop.h = dev_frm_h - rawdump_crop.y - frame_info[0].video_frame.offset_bottom;
-
-		vi_pr(VI_INFO, "set rawdump crop x(%d), y(%d), w(%d), h(%d)\n",
-		      rawdump_crop.x, rawdump_crop.y, rawdump_crop.w, rawdump_crop.h);
-
-		frm_w = rawdump_crop.w;
-		frm_h = rawdump_crop.h;
-	} else {
-		frm_w = dev_frm_w;
-		frm_h = dev_frm_h;
-	}
-	ctx->isp_pipe_cfg[raw_num].rawdump_crop = rawdump_crop;
-	ctx->isp_pipe_cfg[raw_num].rawdump_crop_se = rawdump_crop;
-
-	blksize = vi_getrawbuffersize(frm_w, frm_h, PIXEL_FORMAT_RGB_BAYER_12BPP,
-				      g_vi_ctx->pipe_attr[vi_pipe].compress_mode,
-				      16, g_vi_ctx->is_tile);
-	vi_pr(VI_INFO, "frm_w(%d), frm_h(%d), blksize: %d\n", frm_w, frm_h, blksize);
-
-	ret = _vi_dma_alloc(videv, &raw_dump_vb_info[0], &phyaddr, blksize, 1, "VI_RAW_DUMP_L");
-	if (ret < 0) {
-		vi_pr(VI_ERR, "raw dump dma alloc failed!\n");
-		return ret;
-	}
-	dump[0].raw_dump.phy_addr = phyaddr;
-
-	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
-		frm_num = 2;
-		ret = _vi_dma_alloc(videv, &raw_dump_vb_info[1],
-				    &phyaddr, blksize, 1, "VI_RAW_DUMP_S");
-		if (ret < 0) {
-			vi_pr(VI_ERR, "raw dump dma alloc failed!\n");
-			return ret;
-		}
-		dump[1].raw_dump.phy_addr = phyaddr;
-	}
-
-	if (milli_sec >= 0)
-		dump[0].time_out = dump[1].time_out = milli_sec;
-
-	ret = isp_raw_dump(videv, &dump[0]);
-	if (ret != 0) {
-		vi_pr(VI_ERR, "_isp_raw_dump fail\n");
-		return -1;
-	}
-
-	if (dump[0].is_timeout) {
-		vi_pr(VI_ERR, "Get pipe frame time out(%d)\n", milli_sec);
-		goto free_dma;
-	}
-
-	if (dump[0].is_sig_int) {
-		vi_pr(VI_ERR, "Get pipe frame signal interrupt\n");
-		goto free_dma;
-	}
-
-
-	for (; i < frm_num; i++) {
-		frame_info[i].video_frame.phyaddr[0]  = dump[i].raw_dump.phy_addr;
-		frame_info[i].video_frame.length[0]   = blksize;
-		frame_info[i].video_frame.bayer_format  = g_vi_ctx->dev_attr[dev_id].bayer_format;
-		frame_info[i].video_frame.compress_mode = g_vi_ctx->pipe_attr[dev_id].compress_mode;
-		frame_info[i].video_frame.width       = dump[i].src_w;
-		frame_info[i].video_frame.height      = dump[i].src_h;
-		frame_info[i].video_frame.offset_left  = dump[i].crop_x;
-		frame_info[i].video_frame.offset_top   = dump[i].crop_y;
-		frame_info[i].video_frame.time_ref     = dump[i].frm_num;
-	}
-
-	vi_pr(VI_INFO, "raw dump success\n");
-
-	return 0;
-
-free_dma:
-	_vi_dma_free(videv, &raw_dump_vb_info[0]);
-	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
-		_vi_dma_free(videv, &raw_dump_vb_info[1]);
-	return -1;
-}
-
-int vi_release_pipe_frame(struct sop_vi_dev *videv,
-	const enum sop_isp_raw raw_num)
-{
-	u8 i = 0;
-	int ret = 0;
-
-	ret = check_vi_pipe_valid(raw_num);
-	if (ret != 0)
-		return ret;
-
-	for (i = 0; i < ISP_PRERAW_MAX; i++)
-		free_isp_byr(i);
-
-	_vi_dma_free(videv, &raw_dump_vb_info[0]);
-	if (videv->ctx.isp_pipe_cfg[raw_num].is_hdr_on)
-		_vi_dma_free(videv, &raw_dump_vb_info[1]);
-
-	return 0;
-}
-
-int vi_get_chn_frame(struct sop_vi_dev *videv,
-		     int vi_pipe, video_frame_info_s *frame_info, int milli_sec)
-{
-	struct isp_ctx *ctx = &videv->ctx;
-	u32 width = g_vi_ctx->chn_status[vi_pipe].size.width;
-	u32 height = g_vi_ctx->chn_status[vi_pipe].size.height;
-	u8  raw_num = vi_get_raw_num_by_dev(ctx, vi_pipe);
-	u32 size = videv->pipe[vi_pipe].sizeimage[0] + videv->pipe[vi_pipe].sizeimage[1];
-	u64 phyaddr = 0;
-	int ret = 0;
-	struct timespec64 ts;
-
-	ktime_get_ts64(&ts);
-
-	memset(frame_info, 0, sizeof(*frame_info));
-	frame_info->video_frame.pixel_format = PIXEL_FORMAT_NV21;
-	frame_info->video_frame.width = width;
-	frame_info->video_frame.height = height;
-	frame_info->video_frame.time_ref = videv->postraw_frame_number[vi_pipe];
-	frame_info->video_frame.pts = ts.tv_sec * 1000 + ts.tv_nsec / 1000 / 1000;
-	frame_info->video_frame.stride[0] = width;
-	frame_info->video_frame.stride[1] = width;
-	frame_info->video_frame.stride[2] = width;
-	frame_info->video_frame.length[0] = videv->pipe[vi_pipe].sizeimage[0];
-	frame_info->video_frame.length[1] = videv->pipe[vi_pipe].sizeimage[1];
-	frame_info->video_frame.length[2] = 0;
-
-	ret = _vi_dma_alloc(videv, &yuv_dump_vb_info, &phyaddr, size, 1, "VI_YUV_DUMP");
-
-	if (ret < 0) {
-		vi_pr(VI_ERR, "yuv dump dma alloc failed!\n");
-		return ret;
-	}
-
-	atomic_set(&videv->isp_dump_yuv[raw_num], 1);
-
-	ret = wait_event_interruptible_timeout(videv->yuv_dump_wait_q[raw_num],
-					       atomic_read(&videv->isp_dump_yuv[raw_num]) == 0,
-					       msecs_to_jiffies(milli_sec));
-
-	if (!ret) {
-		vi_pr(VI_ERR, "dev_%d wait dump_yuv timeout(%d ms)\n", vi_pipe, milli_sec);
-		return -ETIME;
-	}
-
-	frame_info->video_frame.phyaddr[0] = phyaddr;
-
-	vi_pr(VI_INFO, "pixfmt(%d), w(%d), h(%d), pts(%lld), addr(0x%llx), stride(%d)\n",
-	      frame_info->video_frame.pixel_format, frame_info->video_frame.width,
-	      frame_info->video_frame.height, frame_info->video_frame.pts,
-	      frame_info->video_frame.phyaddr[0], frame_info->video_frame.stride[0]);
-
-	return ret;
-}
-
-static void vi_release_vb_buffer(struct sop_vi_dev *videv, const u8 chn_id)
-{
-	struct sop_isp_buf *sop_vb, *tmp;
-	struct vb2_buffer *vb2_buf;
-	unsigned long flags;
-
-	spin_lock_irqsave(&videv->qbuf_lock[chn_id], flags);
-	list_for_each_entry_safe(sop_vb, tmp, &(videv->qbuf_list[chn_id]), list) {
-		vb2_buf = &(sop_vb->buf.vb2_buf);
-		if (vb2_buf->state == VB2_BUF_STATE_ERROR)
-			continue;
-		vb2_buffer_done(vb2_buf, VB2_BUF_STATE_ERROR);
-	}
-
-	list_for_each_entry_safe(sop_vb, tmp, &(videv->dqbuf_list[chn_id]), list) {
-		vb2_buf = &(sop_vb->buf.vb2_buf);
-		if (vb2_buf->state == VB2_BUF_STATE_ERROR)
-			continue;
-		vb2_buffer_done(vb2_buf, VB2_BUF_STATE_ERROR);
-	}
-	spin_unlock_irqrestore(&videv->qbuf_lock[chn_id], flags);
-}
-
-int vi_release_chn_frame(struct sop_vi_dev *videv)
-{
-	_vi_dma_free(videv, &yuv_dump_vb_info);
-
-	return 0;
 }
 
 /**
@@ -889,7 +578,7 @@ static void _vi_mempool_reset(void)
  *
  * @return: the latest address of the mempool.
  */
-static u64 _mempool_get_addr(void)
+static uint64_t _mempool_get_addr(void)
 {
 	return isp_mempool.base + isp_mempool.byteused;
 }
@@ -900,7 +589,7 @@ static u64 _mempool_get_addr(void)
  * @param size: the space acquired.
  * @return: negative if no enough space; o/w, the address of the buffer needed.
  */
-static int64_t _mempool_pop(u32 size)
+static int64_t _mempool_pop(uint32_t size)
 {
 	int64_t addr;
 
@@ -918,70 +607,294 @@ static int64_t _mempool_pop(u32 size)
 	return addr;
 }
 
-static bool ddr_need_retrain(struct sop_vi_dev *vdev)
+static int copy_vb2buf_to_dump(struct vb2_buffer *vb2_buf)
 {
-	if (ioread32(vdev->ddr_retrain_reg) & BIT(8)) {
-		return true;
+	uint64_t src_addr = 0;
+	void *src_vir = NULL;
+	void *dst_vir = NULL;
+
+	if (!vb2_buf) {
+		vi_pr(VI_ERR, "NULL vb2_buffer!\n");
+		return -1;
 	}
 
-	return false;
+	if (!yuv_dump_vb_info.phy_addr) {
+		vi_pr(VI_ERR, "yuv dump has not alloc yet!\n");
+		return -1;
+	}
+
+	src_addr = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
+	src_vir = phys_to_virt(src_addr);
+	dst_vir = phys_to_virt(yuv_dump_vb_info.phy_addr);
+
+	memcpy(dst_vir, src_vir, yuv_dump_vb_info.size);
+
+	return 0;
 }
 
-static void trig_8051_if_pre_idle(struct sop_vi_dev *vdev)
+static int _vi_set_dev_bind_info(struct cvi_vi_dev *videv, VI_DEV ViDev, u8 mac_num)
 {
-	enum sop_isp_fe_chn_num fe_chn;
-	enum sop_isp_raw raw_num;
-	enum isp_splt_num_e splt_num;
-	u32 ddr_retrain = 0;
+	struct isp_ctx *ctx = &videv->ctx;
+	u8 raw_num = 0;
+	int ret = -1;
 
-	for (splt_num = ISP_SPLT0; splt_num < ISP_SPLT_MAX; splt_num++) {
-		if ((atomic_read(&vdev->splt_state[splt_num][ISP_SPLT_CHN0]) != ISP_STATE_IDLE) ||
-			(atomic_read(&vdev->splt_state[splt_num][ISP_SPLT_CHN1]) != ISP_STATE_IDLE)) {
-			vi_pr(VI_WARN, "need retrain but raw_%d split busy\n", splt_num);
-			return;
-		}
-	}
-	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
-		if (!vdev->ctx.isp_pipe_enable[raw_num])
-			continue;
-
-		for (fe_chn = ISP_FE_CH0; fe_chn < ISP_FE_CHN_MAX; fe_chn++) {
-			if (atomic_read(&vdev->pre_fe_state[raw_num][fe_chn]) != ISP_STATE_IDLE) {
-				vi_pr(VI_WARN, "need retrain but raw_%d FE busy\n", raw_num);
-				return;
-			}
-		}
+	if (mac_num >= VI_MAX_DEV_NUM) {
+		vi_pr(VI_ERR, "invalid mac(%d)\n", mac_num);
+		return ret;
 	}
 
-	/*if fe and splt idle trig 8051 retrain*/
-	ddr_retrain = ioread32(vdev->ddr_retrain_reg);
-	iowrite32(ddr_retrain | BIT(9), vdev->ddr_retrain_reg);
+	raw_num = mac_num;
 
-	vi_pr(VI_WARN, "call ddr retrain now 0x%x\n", ioread32(vdev->ddr_retrain_reg));
+	if (ctx->isp_bind_info[raw_num].is_bind) {
+		vi_pr(VI_ERR, "mac(%d) is binded before\n", mac_num);
+		return ret;
+	}
+
+	if ((gViCtx->devAttr[ViDev].enInputDataType == VI_DATA_TYPE_YUV ||
+	     gViCtx->devAttr[ViDev].enInputDataType == VI_DATA_TYPE_YUV_EARLY) &&
+	      (gViCtx->devAttr[ViDev].enWorkMode > 0 &&
+	       gViCtx->devAttr[ViDev].enIntfMode >= VI_MODE_BT656 &&
+	       gViCtx->devAttr[ViDev].enIntfMode <= VI_MODE_BT1120_INTERLEAVED)) { // bt_demux
+		if (!(raw_num >= ISP_PRERAW_LITE0 && raw_num <= ISP_PRERAW_LITE1)) {
+			vi_pr(VI_ERR, "invalid bind mac(%d) from vi dev(%d)\n", mac_num, ViDev);
+			return ret;
+		}
+	} else {
+		if (raw_num > ISP_PRERAW5) {
+			vi_pr(VI_ERR, "invalid bind mac(%d) from vi dev(%d)\n", mac_num, ViDev);
+			return ret;
+		}
+	}
+
+	vi_pr(VI_INFO, "dev(%d) bind to mac(%d)\n", ViDev, mac_num);
+	ctx->isp_bind_info[raw_num].is_bind = true;
+	ctx->isp_bind_info[raw_num].bind_dev_num = ViDev;
+	ret = 0;
+
+	return ret;
 }
 
-/**
- * try to trigger preraw and linespliter after postraw done or drop frame done
- */
-static void isp_trig_whole_preraw(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline CVI_S32 check_vi_pipe_valid(VI_PIPE pipe)
 {
-	struct isp_ctx *ctx = &vdev->ctx;
-	s8 ret = ISP_SUCCESS;
+	if (pipe < 0 || pipe > (VI_MAX_PIPE_NUM - 1)) {
+		vi_pr(VI_ERR, "pipe num expect 0~%d, but now %d Caller is %p\n",
+			VI_MAX_PIPE_NUM - 1, pipe, __builtin_return_address(0));
+		return CVI_FAILURE;
+	}
 
-	ret = _pre_hw_enque(vdev, raw_num, ISP_FE_CH0);
+	return CVI_SUCCESS;
+}
+
+CVI_S32 vi_get_pipe_frame(struct cvi_vi_dev *videv, VI_PIPE ViPipe,
+	VIDEO_FRAME_INFO_S *pstFrameInfo, CVI_S32 s32MilliSec)
+{
+	CVI_S32 ret;
+	struct cvi_vip_isp_raw_blk dump[2];
+	CVI_U32 u32BlkSize, dev_frm_w, dev_frm_h, frm_w, frm_h, raw_num;
+	CVI_U64 u64PhyAddr = 0;
+	int dev_id = ViPipe, frm_num = 1, i = 0;
+	struct vi_rect rawdump_crop;
+	struct isp_ctx *ctx = &videv->ctx;
+
+	ret = check_vi_pipe_valid(ViPipe);
+	if (ret != CVI_SUCCESS)
+		return ret;
+
+	if (atomic_read(&videv->isp_streamoff) == 1) {
+		vi_pr(VI_ERR, "StartStream first\n");
+		return CVI_FAILURE;
+	}
+
+	if (gViCtx->dumpAttr[ViPipe].bEnable == CVI_FALSE) {
+		vi_pr(VI_ERR, "SetPipeDumpAttr first\n");
+		return CVI_FAILURE;
+	}
+
+	if (gViCtx->dumpAttr[ViPipe].enDumpType == VI_DUMP_TYPE_YUV ||
+		gViCtx->dumpAttr[ViPipe].enDumpType == VI_DUMP_TYPE_IR) {
+		vi_pr(VI_ERR, "IR or yuv raw dump is not supported.\n");
+		return CVI_FAILURE;
+	}
+
+	memset(dump, 0, sizeof(dump));
+	raw_num = vi_get_raw_num_by_dev(ctx, ViPipe);
+	dump[0].raw_dump.raw_num = raw_num;
+
+	dev_frm_w = ctx->isp_pipe_cfg[raw_num].crop.w;
+	dev_frm_h = ctx->isp_pipe_cfg[raw_num].crop.h;
+
+	memset(&rawdump_crop, 0, sizeof(rawdump_crop));
+	if ((pstFrameInfo[0].stVFrame.s16OffsetTop != 0) ||
+		(pstFrameInfo[0].stVFrame.s16OffsetBottom != 0) ||
+		(pstFrameInfo[0].stVFrame.s16OffsetLeft != 0) ||
+		(pstFrameInfo[0].stVFrame.s16OffsetRight != 0)) {
+		rawdump_crop.x = pstFrameInfo[0].stVFrame.s16OffsetLeft;
+		rawdump_crop.y = pstFrameInfo[0].stVFrame.s16OffsetTop;
+		rawdump_crop.w = dev_frm_w - rawdump_crop.x - pstFrameInfo[0].stVFrame.s16OffsetRight;
+		rawdump_crop.h = dev_frm_h - rawdump_crop.y - pstFrameInfo[0].stVFrame.s16OffsetBottom;
+
+		vi_pr(VI_INFO, "set rawdump crop x(%d), y(%d), w(%d), h(%d)\n",
+			rawdump_crop.x, rawdump_crop.y, rawdump_crop.w, rawdump_crop.h);
+
+		frm_w = rawdump_crop.w;
+		frm_h = rawdump_crop.h;
+	} else {
+		frm_w = dev_frm_w;
+		frm_h = dev_frm_h;
+	}
+	ctx->isp_pipe_cfg[raw_num].rawdump_crop = rawdump_crop;
+	ctx->isp_pipe_cfg[raw_num].rawdump_crop_se = rawdump_crop;
+
+	u32BlkSize = VI_GetRawBufferSize(frm_w, frm_h,
+					PIXEL_FORMAT_RGB_BAYER_12BPP,
+					gViCtx->pipeAttr[ViPipe].enCompressMode,
+					16, gViCtx->isTile);
+	vi_pr(VI_INFO, "frm_w(%d), frm_h(%d), u32BlkSize: %d\n",
+		frm_w, frm_h, u32BlkSize);
+
+	ret = _vi_dma_alloc(videv, &raw_dump_vb_info[0],
+		&u64PhyAddr, u32BlkSize, 1, "VI_RAW_DUMP_L");
+	if (ret < 0) {
+		vi_pr(VI_ERR, "raw dump dma alloc failed!\n");
+		return ret;
+	}
+	dump[0].raw_dump.phy_addr = u64PhyAddr;
+
 	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
-		ret |= _pre_hw_enque(vdev, raw_num, ISP_FE_CH1);
-	}
-
-	if (ctx->isp_pipe_cfg[raw_num].is_tile || line_spliter_en) {
-		ret |= _pre_hw_enque(vdev, raw_num + 1, ISP_FE_CH0);
-		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
-			ret |= _pre_hw_enque(vdev, raw_num + 1, ISP_FE_CH1);
-
-		if (ddr_need_retrain(vdev) || ret == ISP_SUCCESS) {
-			_splt_hw_enque(vdev, raw_num);
+		frm_num = 2;
+		ret = _vi_dma_alloc(videv, &raw_dump_vb_info[1],
+			&u64PhyAddr, u32BlkSize, 1, "VI_RAW_DUMP_S");
+		if (ret < 0) {
+			vi_pr(VI_ERR, "raw dump dma alloc failed!\n");
+			return ret;
 		}
+		dump[1].raw_dump.phy_addr = u64PhyAddr;
 	}
+
+	if (s32MilliSec >= 0)
+		dump[0].time_out = dump[1].time_out = s32MilliSec;
+
+	ret = isp_raw_dump(videv, &dump[0]);
+	if (ret != CVI_SUCCESS) {
+		vi_pr(VI_ERR, "_isp_raw_dump fail\n");
+		return CVI_FAILURE;
+	}
+
+	if (dump[0].is_timeout) {
+		vi_pr(VI_ERR, "Get pipe frame time out(%d)\n", s32MilliSec);
+		goto free_dma;
+	}
+
+	if (dump[0].is_sig_int) {
+		vi_pr(VI_ERR, "Get pipe frame signal interrupt\n");
+		goto free_dma;
+	}
+
+
+	for (; i < frm_num; i++) {
+		pstFrameInfo[i].stVFrame.u64PhyAddr[0]  = dump[i].raw_dump.phy_addr;
+		pstFrameInfo[i].stVFrame.u32Length[0]   = u32BlkSize;
+		pstFrameInfo[i].stVFrame.enBayerFormat  = gViCtx->devAttr[dev_id].enBayerFormat;
+		pstFrameInfo[i].stVFrame.enCompressMode = gViCtx->pipeAttr[dev_id].enCompressMode;
+		pstFrameInfo[i].stVFrame.u32Width       = dump[i].src_w;
+		pstFrameInfo[i].stVFrame.u32Height      = dump[i].src_h;
+		pstFrameInfo[i].stVFrame.s16OffsetLeft  = dump[i].crop_x;
+		pstFrameInfo[i].stVFrame.s16OffsetTop   = dump[i].crop_y;
+		pstFrameInfo[i].stVFrame.u32TimeRef     = dump[i].frm_num;
+	}
+
+	vi_pr(VI_INFO, "raw dump success\n");
+
+	return CVI_SUCCESS;
+
+free_dma:
+	_vi_dma_free(videv, &raw_dump_vb_info[0]);
+	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
+		_vi_dma_free(videv, &raw_dump_vb_info[1]);
+	return CVI_FAILURE;
+}
+
+CVI_S32 vi_release_pipe_frame(struct cvi_vi_dev *videv,
+	const enum cvi_isp_raw raw_num)
+{
+	u8 i = 0;
+	CVI_S32 ret = CVI_SUCCESS;
+
+	ret = check_vi_pipe_valid(raw_num);
+	if (ret != CVI_SUCCESS)
+		return ret;
+
+	for (i = 0; i < ISP_PRERAW_MAX; i++) {
+		free_isp_byr(i);
+	}
+
+	_vi_dma_free(videv, &raw_dump_vb_info[0]);
+	if (videv->ctx.isp_pipe_cfg[raw_num].is_hdr_on)
+		_vi_dma_free(videv, &raw_dump_vb_info[1]);
+
+	return CVI_SUCCESS;
+}
+
+CVI_S32 vi_get_chn_frame(struct cvi_vi_dev *videv,
+	VI_PIPE ViPipe, VIDEO_FRAME_INFO_S *pstFrameInfo, CVI_S32 s32MilliSec)
+{
+	struct isp_ctx *ctx = &videv->ctx;
+	u32 width = gViCtx->chnStatus[ViPipe].stSize.u32Width;
+	u32 height = gViCtx->chnStatus[ViPipe].stSize.u32Height;
+	u8	raw_num = vi_get_raw_num_by_dev(ctx, ViPipe);
+	u32 size = videv->pipe[raw_num].sizeimage[0] + videv->pipe[raw_num].sizeimage[1];
+	u64 u64PhyAddr = 0;
+	CVI_S32 ret = 0;
+	struct timespec64 ts;
+
+	ktime_get_ts64(&ts);
+
+	memset(pstFrameInfo, 0, sizeof(*pstFrameInfo));
+	pstFrameInfo->stVFrame.enPixelFormat = PIXEL_FORMAT_NV21;
+	pstFrameInfo->stVFrame.u32Width = width;
+	pstFrameInfo->stVFrame.u32Height = height;
+	pstFrameInfo->stVFrame.u32TimeRef = videv->postraw_frame_number[raw_num];
+	pstFrameInfo->stVFrame.u64PTS = ts.tv_sec * 1000 + ts.tv_nsec / 1000 / 1000;
+	pstFrameInfo->stVFrame.u32Stride[0] = width;
+	pstFrameInfo->stVFrame.u32Stride[1] = width;
+	pstFrameInfo->stVFrame.u32Stride[2] = width;
+	pstFrameInfo->stVFrame.u32Length[0] = videv->pipe[raw_num].sizeimage[0];
+	pstFrameInfo->stVFrame.u32Length[1] = videv->pipe[raw_num].sizeimage[1];
+	pstFrameInfo->stVFrame.u32Length[2] = 0;
+
+	ret = _vi_dma_alloc(videv, &yuv_dump_vb_info, &u64PhyAddr, size, 1, "VI_YUV_DUMP");
+	if (ret < 0) {
+		vi_pr(VI_ERR, "yuv dump dma alloc failed!\n");
+		return ret;
+	}
+
+	atomic_set(&videv->isp_dump_yuv[raw_num], 1);
+
+	ret = wait_event_interruptible_timeout(
+		videv->yuv_dump_wait_q[raw_num],
+		atomic_read(&videv->isp_dump_yuv[raw_num]) == 0,
+		msecs_to_jiffies(s32MilliSec));
+
+	if (!ret) {
+		vi_pr(VI_ERR, "dev_%d wait dump_yuv timeout(%d ms)\n", ViPipe, s32MilliSec);
+		return -ETIME;
+	}
+
+	pstFrameInfo->stVFrame.u64PhyAddr[0] = u64PhyAddr;
+
+	vi_pr(VI_INFO, "pixfmt(%d), w(%d), h(%d), pts(%lld), addr(0x%llx), stride(%d)\n",
+			pstFrameInfo->stVFrame.enPixelFormat, pstFrameInfo->stVFrame.u32Width,
+			pstFrameInfo->stVFrame.u32Height, pstFrameInfo->stVFrame.u64PTS,
+			pstFrameInfo->stVFrame.u64PhyAddr[0], pstFrameInfo->stVFrame.u32Stride[0]);
+
+	return ret;
+}
+
+CVI_S32 vi_release_chn_frame(struct cvi_vi_dev *videv)
+{
+	_vi_dma_free(videv, &yuv_dump_vb_info);
+
+	return CVI_SUCCESS;
 }
 
 /**
@@ -999,10 +912,10 @@ static void _isp_tile_calc_size(struct isp_ctx *ictx)
 {
 	struct _isp_cfg *cfg_raw0 = &ictx->isp_pipe_cfg[ISP_PRERAW0];
 	struct _isp_cfg *cfg_raw1 = &ictx->isp_pipe_cfg[ISP_PRERAW1];
-	u32 guard = (ictx->img_width % 16 == 0)
+	uint32_t guard = (ictx->img_width % 16 == 0)
 			? (ictx->img_width / 16)
 			: (ictx->img_width / 16) + 1;
-	u32 left_width = guard * (16 / 2 + 1);
+	uint32_t left_width = guard * (16 / 2 + 1);
 
 	ictx->tile_cfg.l_in.start  = 0;
 	ictx->tile_cfg.l_in.end    = cfg_raw0->crop.x + left_width - 1;
@@ -1014,13 +927,13 @@ static void _isp_tile_calc_size(struct isp_ctx *ictx)
 	ictx->tile_cfg.r_out.end   = ictx->img_width - 1;
 
 	vi_pr(VI_INFO, "tile cfg: img_width(%d) left_width(%d) guard(%d)\n",
-	      ictx->img_width, left_width, guard);
+		ictx->img_width, left_width, guard);
 	vi_pr(VI_INFO, "tile cfg: Left in(%d %d) out(%d %d)\n",
-	      ictx->tile_cfg.l_in.start, ictx->tile_cfg.l_in.end,
-	      ictx->tile_cfg.l_out.start, ictx->tile_cfg.l_out.end);
+		ictx->tile_cfg.l_in.start, ictx->tile_cfg.l_in.end,
+		ictx->tile_cfg.l_out.start, ictx->tile_cfg.l_out.end);
 	vi_pr(VI_INFO, "tile cfg: Right in(%d %d) out(%d %d)\n",
-	      ictx->tile_cfg.r_in.start, ictx->tile_cfg.r_in.end,
-	      ictx->tile_cfg.r_out.start, ictx->tile_cfg.r_out.end);
+		ictx->tile_cfg.r_in.start, ictx->tile_cfg.r_in.end,
+		ictx->tile_cfg.r_out.start, ictx->tile_cfg.r_out.end);
 
 	memcpy(cfg_raw1, cfg_raw0, sizeof(struct _isp_cfg));
 	cfg_raw0->csibdg_width = cfg_raw0->crop.x + ictx->tile_cfg.l_out.end + 1;
@@ -1053,14 +966,14 @@ static void _isp_tile_calc_size(struct isp_ctx *ictx)
 
 	vi_pr(VI_INFO, "csibdg max, w:h=%d:%d\n", cfg_raw0->max_width, cfg_raw0->max_height);
 	vi_pr(VI_INFO, "csibdg_%d, w:h=%d:%d, crop_x:y:w:h=%d:%d:%d:%d\n",
-	      ISP_PRERAW0, cfg_raw0->csibdg_width, cfg_raw0->csibdg_height,
-	      cfg_raw0->crop.x, cfg_raw0->crop.y, cfg_raw0->crop.w, cfg_raw0->crop.h);
+		ISP_PRERAW0, cfg_raw0->csibdg_width, cfg_raw0->csibdg_height,
+		cfg_raw0->crop.x, cfg_raw0->crop.y, cfg_raw0->crop.w, cfg_raw0->crop.h);
 	vi_pr(VI_INFO, "csibdg_%d, w:h=%d:%d, crop_x:y:w:h=%d:%d:%d:%d\n",
-	      ISP_PRERAW1, cfg_raw1->csibdg_width, cfg_raw1->csibdg_height,
-	      cfg_raw1->crop.x, cfg_raw1->crop.y, cfg_raw1->crop.w, cfg_raw1->crop.h);
+		ISP_PRERAW1, cfg_raw1->csibdg_width, cfg_raw1->csibdg_height,
+		cfg_raw1->crop.x, cfg_raw1->crop.y, cfg_raw1->crop.w, cfg_raw1->crop.h);
 }
 
-void _isp_snr_cfg_enq(struct sop_isp_snr_update *snr_node, const enum sop_isp_raw raw_num)
+void _isp_snr_cfg_enq(struct cvi_isp_snr_update *snr_node, const enum cvi_isp_raw raw_num)
 {
 	unsigned long flags;
 	struct _isp_snr_i2c_node *n, *q;
@@ -1093,7 +1006,7 @@ void _isp_snr_cfg_enq(struct sop_isp_snr_update *snr_node, const enum sop_isp_ra
 	spin_unlock_irqrestore(&snr_node_lock[raw_num], flags);
 }
 
-void sop_isp_rdy_buf_queue(struct sop_vi_dev *vdev, struct sop_isp_buf *b, const u8 chn_num)
+void cvi_isp_rdy_buf_queue(struct cvi_vi_dev *vdev, struct cvi_isp_buf *b, const u8 chn_num)
 {
 	unsigned long flags;
 
@@ -1102,75 +1015,119 @@ void sop_isp_rdy_buf_queue(struct sop_vi_dev *vdev, struct sop_isp_buf *b, const
 		return;
 	}
 
-	spin_lock_irqsave(&vdev->qbuf_lock[chn_num], flags);
+	spin_lock_irqsave(&vdev->qbuf_lock, flags);
 	list_add_tail(&b->list, &vdev->qbuf_list[chn_num]);
 	++vdev->qbuf_num[chn_num];
-	spin_unlock_irqrestore(&vdev->qbuf_lock[chn_num], flags);
-
-	//workaround: when buffer empty,it cause fe_done_handler trig fail, here trig again
-	if (atomic_read(&vdev->out_buf_empty[chn_num]) && vdev->qbuf_num[chn_num] >= 1) {
-		atomic_set(&vdev->out_buf_empty[chn_num], 0);
-		if (vdev->ctx.isp_pipe_cfg[chn_num].yuv_scene_mode == ISP_YUV_SCENE_BYPASS) {
-			u8 hw_chn = vdev->ctx.isp_bind_info[chn_num].hw_chn;
-			u8 actual_raw = vdev->ctx.isp_bind_info[chn_num].bind_fe_num;
-			vi_pr(VI_INFO, "dev_%d retrig pre_%d_chn_%d\n", chn_num, actual_raw, hw_chn);
-			_isp_yuv_bypass_trigger(vdev, actual_raw, hw_chn);
-		} else {
-			u8 raw_num = vi_get_raw_num_by_dev(&vdev->ctx, chn_num);
-			vi_pr(VI_INFO, "dev_%d vb get ready, retrig pre_%d\n", chn_num, raw_num);
-			_pre_hw_enque(vdev, chn_num, ISP_FE_CH0);
-			if (vdev->ctx.isp_pipe_cfg[chn_num].is_hdr_on)
-				_pre_hw_enque(vdev, chn_num, ISP_FE_CH1);
-		}
-	}
+	spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 }
 
-struct sop_isp_buf *sop_isp_rdy_buf_next(struct sop_vi_dev *vdev, const u8 chn_num)
+struct cvi_isp_buf *cvi_isp_rdy_buf_next(struct cvi_vi_dev *vdev, const u8 chn_num)
 {
 	unsigned long flags;
-	struct sop_isp_buf *b = NULL;
+	struct cvi_isp_buf *b = NULL;
 
-	spin_lock_irqsave(&vdev->qbuf_lock[chn_num], flags);
+	spin_lock_irqsave(&vdev->qbuf_lock, flags);
 	if (!list_empty(&vdev->qbuf_list[chn_num]))
-		b = list_first_entry(&vdev->qbuf_list[chn_num], struct sop_isp_buf, list);
-	spin_unlock_irqrestore(&vdev->qbuf_lock[chn_num], flags);
+		b = list_first_entry(&vdev->qbuf_list[chn_num], struct cvi_isp_buf, list);
+	spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 
 	return b;
 }
 
-int sop_isp_rdy_buf_empty(struct sop_vi_dev *vdev, const u8 chn_num)
+int cvi_isp_rdy_buf_empty(struct cvi_vi_dev *vdev, const u8 chn_num)
 {
 	unsigned long flags;
 	int empty = 0;
 
-	spin_lock_irqsave(&vdev->qbuf_lock[chn_num], flags);
+	spin_lock_irqsave(&vdev->qbuf_lock, flags);
 	empty = (vdev->qbuf_num[chn_num] == 0);
-	spin_unlock_irqrestore(&vdev->qbuf_lock[chn_num], flags);
+	spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 
 	return empty;
 }
 
-void sop_isp_rdy_buf_pop(struct sop_vi_dev *vdev, const u8 chn_num)
+void cvi_isp_rdy_buf_pop(struct cvi_vi_dev *vdev, const u8 chn_num)
 {
 	unsigned long flags;
 
-	if (vdev->postraw_frame_number[chn_num] <= g_vi_ctx->bypass_frm[chn_num])
+	if (vdev->postraw_frame_number[chn_num] <= gViCtx->bypass_frm[chn_num]) {
 		return;
+	}
 
-	spin_lock_irqsave(&vdev->qbuf_lock[chn_num], flags);
+	spin_lock_irqsave(&vdev->qbuf_lock, flags);
 	vdev->qbuf_num[chn_num]--;
-	spin_unlock_irqrestore(&vdev->qbuf_lock[chn_num], flags);
+	spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 }
 
-static void _isp_preraw_fe_dma_dump(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
+void _vi_yuv_dma_setup(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
+{
+	struct _membuf *pool = &isp_bufpool[raw_num];
+	struct isp_buffer *b;
+	struct isp_ctx *ictx = ctx;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
+	uint32_t base = 0, dma = 0;
+	uint32_t rgbmap_le = 0;
+	uint8_t i = 0, j = 0;
+	uint8_t total_chn = ctx->isp_pipe_cfg[raw_num].muxMode + 1;
+
+	if (ctx->isp_pipe_cfg[raw_num].is_bt_demux)
+		base = csibdg_lite_dma_find_hwid(raw_num, ISP_FE_CH0);
+	else
+		base = csibdg_dma_find_hwid(raw_num, ISP_FE_CH0);
+
+	for (i = 0; i < total_chn; i++) {
+		dma = base + i;
+
+		for (j = 0; j < OFFLINE_YUV_BUF_NUM; j++) {
+			b = vmalloc(sizeof(*b));
+			if (b == NULL) {
+				vi_pr(VI_ERR, "yuv_buf isp_buf_%d vmalloc size(%zu) fail\n", j, sizeof(*b));
+				return;
+			}
+			memset(b, 0, sizeof(*b));
+			b->raw_num = raw_num;
+			b->chn_num = i;
+			bufsize = ispblk_dma_yuv_bypass_config(ctx, dma, 0, raw_num);
+			pool->yuv_yuyv[i][j] = b->addr = _mempool_pop(bufsize);
+
+			if (j == 0)
+				ispblk_dma_setaddr(ctx, dma, b->addr);
+
+			isp_buf_queue(&pre_fe_out_q[raw_num][i], b);
+		}
+	}
+
+	if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_ISP &&
+	    !ctx->isp_pipe_cfg[raw_num].is_bt_demux) {
+		if (ctx->is_3dnr_on) {
+			// rgbmap_le
+			rgbmap_le = rgbmap_dma_find_hwid(raw_num, ISP_RAW_PATH_LE);
+			DMA_SETUP_2(raw_num, rgbmap_le);
+			isp_bufpool[raw_num].rgbmap_le[0] = bufaddr;
+			ispblk_rgbmap_dma_config(ctx, raw_num, rgbmap_le);
+
+			//Slice buffer mode use ring buffer
+			if (!(_is_fe_be_online(ctx) && ctx->is_rgbmap_sbm_on)) {
+				if (!_is_all_online(ctx)) {
+					for (i = 1; i < RGBMAP_BUF_IDX; i++)
+						isp_bufpool[raw_num].rgbmap_le[i] = _mempool_pop(bufsize);
+				}
+			}
+		}
+	}
+}
+
+static void _isp_preraw_fe_dma_dump(struct isp_ctx *ictx, enum cvi_isp_raw raw_num)
 {
 	u8 i = 0;
 	u8 pre_fe_buf_num = OFFLINE_RAW_BUF_NUM;
 	char str[64] = "PRERAW_FE";
 
-	//for fe ai isp, need more buffer
-	if (ictx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_FE)
+	//for ai isp, need more buffer
+	if (ictx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 		pre_fe_buf_num += BNR_AI_ISP_BUF_NUM;
+	}
 
 	vi_pr(VI_INFO, "***************%s_%d************************\n", str, raw_num);
 	for (i = 0; i < pre_fe_buf_num; i++)
@@ -1190,7 +1147,7 @@ static void _isp_preraw_fe_dma_dump(struct isp_ctx *ictx, enum sop_isp_raw raw_n
 	if (ictx->isp_pipe_cfg[raw_num].is_yuv_sensor &&
 		!ictx->isp_pipe_cfg[raw_num].is_offline_scaler) {
 		for (i = 0; i < ISP_FE_CHN_MAX; i++) {
-			vi_pr(VI_INFO, "yuyv_yuv(0x%llx), yuyv_yuv(0x%llx)\n",
+			vi_pr(VI_DBG, "yuyv_yuv(0x%llx), yuyv_yuv(0x%llx)\n",
 				isp_bufpool[raw_num].yuv_yuyv[i][0], isp_bufpool[raw_num].yuv_yuyv[i][1]);
 		}
 	}
@@ -1201,7 +1158,7 @@ static void _isp_preraw_be_dma_dump(struct isp_ctx *ictx)
 {
 	u8 i = 0;
 	char str[64] = "PRERAW_BE";
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	u8 first_raw_num = vi_get_first_raw_num(ictx);
 
 	vi_pr(VI_INFO, "***************%s************************\n", str);
@@ -1227,8 +1184,9 @@ static void _isp_preraw_be_dma_dump(struct isp_ctx *ictx)
 		for (i = 0; i < OFFLINE_PRE_BE_BUF_NUM; i++) {
 			if (ictx->isp_pipe_cfg[raw_num].is_rgbir_sensor) {
 				vi_pr(VI_DBG, "ir_le(0x%llx)\n", isp_bufpool[raw_num].ir_le[i]);
-				if (ictx->isp_pipe_cfg[raw_num].is_hdr_on)
+				if (ictx->isp_pipe_cfg[raw_num].is_hdr_on) {
 					vi_pr(VI_DBG, "ir_se(0x%llx)\n", isp_bufpool[raw_num].ir_se[i]);
+				}
 			}
 		}
 	}
@@ -1238,7 +1196,7 @@ static void _isp_preraw_be_dma_dump(struct isp_ctx *ictx)
 static void _isp_rawtop_dma_dump(struct isp_ctx *ictx)
 {
 	char str[64] = "RAW_TOP";
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	vi_pr(VI_INFO, "***************%s************************\n", str);
 	vi_pr(VI_DBG, "rawtop_rdma_le(0x%llx)\n", isp_bufpool[raw_num].pre_be_le[0]);
@@ -1278,7 +1236,7 @@ static void _isp_rawtop_dma_dump(struct isp_ctx *ictx)
 static void _isp_rgbtop_dma_dump(struct isp_ctx *ictx)
 {
 	char str[64] = "RGB_TOP";
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	vi_pr(VI_INFO, "***************%s************************\n", str);
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
@@ -1309,10 +1267,10 @@ static void _isp_rgbtop_dma_dump(struct isp_ctx *ictx)
 static void _isp_yuvtop_dma_dump(struct isp_ctx *ictx)
 {
 	char str[64] = "YUV_TOP";
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
-	u64 dci_bufaddr = 0;
-	u64 ldci_bufaddr = 0;
+	uint64_t dci_bufaddr = 0;
+	uint64_t ldci_bufaddr = 0;
 
 	vi_pr(VI_INFO, "***************%s************************\n", str);
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
@@ -1329,17 +1287,17 @@ static void _isp_yuvtop_dma_dump(struct isp_ctx *ictx)
 		dci_bufaddr = isp_bufpool[raw_num].sts_mem[1].dci.phy_addr;
 		ldci_bufaddr = isp_bufpool[raw_num].ldci;
 		vi_pr(VI_DBG, "ldci wasted_bufsize_for_alignment(%d)\n",
-			(u32)(ldci_bufaddr - (dci_bufaddr + 0x200)));
+			(uint32_t)(ldci_bufaddr - (dci_bufaddr + 0x200)));
 	}
 	vi_pr(VI_INFO, "*************************************************\n");
 	vi_pr(VI_INFO, "VI total reserved memory(0x%x)\n", isp_mempool.byteused);
 	vi_pr(VI_INFO, "*************************************************\n");
 }
 
-static void _isp_manr_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
+static void _isp_manr_dma_setup(struct isp_ctx *ictx, enum cvi_isp_raw raw_num)
 {
-	u64 bufaddr = 0;
-	u32 bufsize = 0;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
 
 	if (!ictx->is_3dnr_on)
 		return;
@@ -1455,23 +1413,26 @@ static void _isp_manr_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 	}
 }
 
-void _isp_splt_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
+void _isp_splt_dma_setup(struct isp_ctx *ictx, enum cvi_isp_raw raw_num)
 {
-	u64 dma_addr = 0;
-	u64 bufaddr = 0;
-	u32 bufsize = 0;
-	u32 splt_fe0_le = ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_LE;
-	u32 splt_fe0_se = ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_SE;
-	u32 splt_fe1_le = ISP_BLK_ID_DMA_CTL_SPLT_FE1_WDMA_LE;
-	u32 splt_fe1_se = ISP_BLK_ID_DMA_CTL_SPLT_FE1_WDMA_SE;
-	u8  i = 0;
+	uint64_t dma_addr = 0;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
+	uint32_t splt_fe0_le = ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_LE;
+	uint32_t splt_fe0_se = ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_SE;
+	uint32_t splt_fe1_le = ISP_BLK_ID_DMA_CTL_SPLT_FE1_WDMA_LE;
+	uint32_t splt_fe1_se = ISP_BLK_ID_DMA_CTL_SPLT_FE1_WDMA_SE;
+	uint8_t  i = 0;
 	struct isp_buffer *b;
-	enum sop_isp_fe_chn_num chn_num = ISP_FE_CH0;
+	enum cvi_isp_fe_chn_num chn_num = ISP_FE_CH0;
+
+	//raw ai isp move to FE, abandon splt config
+	return;
 
 	if (raw_num != ISP_PRERAW0)
 		return;
 
-	if (ictx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT) {
+	if (ictx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 		chn_num = ISP_FE_CH0;
 		for (i = 0; i < OFFLINE_SPLT_BUF_NUM; i++) {
 			DMA_SETUP_2(raw_num, splt_fe0_le);
@@ -1526,19 +1487,23 @@ void _isp_splt_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 	}
 }
 
-void _isp_pre_fe_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
+void _isp_pre_fe_dma_setup(struct isp_ctx *ictx, enum cvi_isp_raw raw_num)
 {
-	u64 bufaddr = 0;
-	u32 bufsize = 0;
-	u8  i = 0;
-	u8  pre_fe_buf_num = OFFLINE_RAW_BUF_NUM;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
+	uint8_t  i = 0;
+	uint8_t  pre_fe_buf_num = OFFLINE_RAW_BUF_NUM;
 	struct isp_buffer *b;
 
 	u32 raw_le, raw_se;
 	u32 rgbmap_le, rgbmap_se;
 
-	if (ictx->isp_pipe_cfg[raw_num].is_yuv_sensor) //YUV sensor
+	if (ictx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //YUV sensor
+		if (!ictx->isp_pipe_cfg[raw_num].is_offline_scaler) //Online mode to scaler
+			_vi_yuv_dma_setup(ictx, raw_num);
+
 		goto EXIT;
+	}
 
 	raw_le = csibdg_dma_find_hwid(raw_num, ISP_FE_CH0);
 	raw_se = csibdg_dma_find_hwid(raw_num, ISP_FE_CH1);
@@ -1547,8 +1512,9 @@ void _isp_pre_fe_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 
 	if (_is_be_post_online(ictx) && !ictx->isp_pipe_cfg[raw_num].is_raw_replay_be) { //fe->dram->be->post
 		//for ai isp, need more buffer
-		if (ictx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_FE)
+		if (ictx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 			pre_fe_buf_num += BNR_AI_ISP_BUF_NUM;
+		}
 
 		for (i = 0; i < pre_fe_buf_num; i++) {
 			DMA_SETUP_2(raw_num, raw_le);
@@ -1562,7 +1528,6 @@ void _isp_pre_fe_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 			b->raw_num = raw_num;
 			b->chn_num = ISP_FE_CH0;
 			b->ir_idx = i;
-			b->is_ext = INTERNAL_BUFFER;
 			isp_bufpool[raw_num].pre_fe_le[i] = b->addr;
 			isp_buf_queue(&pre_fe_out_q[raw_num][ISP_FE_CH0], b);
 		}
@@ -1587,7 +1552,6 @@ void _isp_pre_fe_dma_setup(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 				b->raw_num = raw_num;
 				b->chn_num = ISP_FE_CH1;
 				b->ir_idx = i;
-				b->is_ext = INTERNAL_BUFFER;
 				isp_bufpool[raw_num].pre_fe_se[i] = b->addr;
 				isp_buf_queue(&pre_fe_out_q[raw_num][ISP_FE_CH1], b);
 			}
@@ -1652,12 +1616,12 @@ EXIT:
 
 void _isp_pre_be_dma_setup(struct isp_ctx *ictx)
 {
-	u64 bufaddr = 0;
-	u32 bufsize = 0;
-	u8  buf_num = 0;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
+	uint8_t  buf_num = 0;
 	struct isp_buffer *b;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	u8 first_raw_num = vi_get_first_raw_num(ictx);
 	u8 cfg_dma = false;
 
@@ -1710,7 +1674,6 @@ void _isp_pre_be_dma_setup(struct isp_ctx *ictx)
 				b->addr = bufaddr;
 				b->raw_num = first_raw_num;
 				b->ir_idx = buf_num;
-				b->is_ext = INTERNAL_BUFFER;
 				isp_bufpool[first_raw_num].pre_be_le[buf_num] = b->addr;
 				isp_buf_queue(&pre_be_out_q[ISP_RAW_PATH_LE], b);
 			}
@@ -1731,7 +1694,6 @@ void _isp_pre_be_dma_setup(struct isp_ctx *ictx)
 					b->addr = bufaddr;
 					b->raw_num = first_raw_num;
 					b->ir_idx = buf_num;
-					b->is_ext = INTERNAL_BUFFER;
 					isp_bufpool[first_raw_num].pre_be_se[buf_num] = b->addr;
 					isp_buf_queue(&pre_be_out_q[ISP_RAW_PATH_SE], b);
 				}
@@ -1752,13 +1714,11 @@ void _isp_pre_be_dma_setup(struct isp_ctx *ictx)
 			continue;
 
 		// af
-		DMA_SETUP_2(raw_num, ISP_BLK_ID_DMA_CTL_AF_W);
+		DMA_SETUP(raw_num, ISP_BLK_ID_DMA_CTL_AF_W);
 		isp_bufpool[raw_num].sts_mem[0].af.phy_addr = bufaddr;
 		isp_bufpool[raw_num].sts_mem[0].af.size = bufsize;
 		isp_bufpool[raw_num].sts_mem[1].af.phy_addr = _mempool_pop(bufsize);
 		isp_bufpool[raw_num].sts_mem[1].af.size = bufsize;
-		ispblk_dma_config(ictx, raw_num, ISP_BLK_ID_DMA_CTL_AF_W,
-				  isp_bufpool[raw_num].sts_mem[0].af.phy_addr);
 
 		// rgbir
 		if (ictx->isp_pipe_cfg[raw_num].is_rgbir_sensor) {
@@ -1783,10 +1743,10 @@ EXIT:
 
 void _isp_rawtop_dma_setup(struct isp_ctx *ictx)
 {
-	u64 bufaddr = 0;
-	u32 bufsize = 0;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -1829,8 +1789,9 @@ void _isp_rawtop_dma_setup(struct isp_ctx *ictx)
 		isp_bufpool[raw_num].lsc = bufaddr;
 
 		// left tile and right tile use the same lsc addr
-		if (ictx->isp_pipe_cfg[raw_num].is_tile)
+		if (ictx->isp_pipe_cfg[raw_num].is_tile) {
 			isp_bufpool[raw_num + 1].lsc = bufaddr;
+		}
 
 		// gms
 		bufaddr = _mempool_get_addr();
@@ -1845,20 +1806,13 @@ void _isp_rawtop_dma_setup(struct isp_ctx *ictx)
 		// lmap_le
 		DMA_SETUP_2(raw_num, ISP_BLK_ID_DMA_CTL_LMAP_LE);
 		isp_bufpool[raw_num].lmap_le = bufaddr;
-		if (ictx->isp_pipe_cfg[raw_num].is_tile) {
-			bufaddr = _mempool_get_addr();
-			_mempool_pop(bufsize);
-			isp_bufpool[raw_num + 1].lmap_le = bufaddr;
-		}
 
 		// ae le
-		DMA_SETUP_2(raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_LE);
+		DMA_SETUP(raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_LE);
 		isp_bufpool[raw_num].sts_mem[0].ae_le.phy_addr = bufaddr;
 		isp_bufpool[raw_num].sts_mem[0].ae_le.size = bufsize;
 		isp_bufpool[raw_num].sts_mem[1].ae_le.phy_addr = _mempool_pop(bufsize);
 		isp_bufpool[raw_num].sts_mem[1].ae_le.size = bufsize;
-		ispblk_dma_config(ictx, raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_LE,
-				  isp_bufpool[raw_num].sts_mem[0].ae_le.phy_addr);
 
 		if (ictx->isp_pipe_cfg[raw_num].is_hdr_on) {
 			// lsc_se
@@ -1867,20 +1821,13 @@ void _isp_rawtop_dma_setup(struct isp_ctx *ictx)
 			// lmap_se
 			DMA_SETUP_2(raw_num, ISP_BLK_ID_DMA_CTL_LMAP_SE);
 			isp_bufpool[raw_num].lmap_se = bufaddr;
-			if (ictx->isp_pipe_cfg[raw_num].is_tile) {
-				bufaddr = _mempool_get_addr();
-				_mempool_pop(bufsize);
-				isp_bufpool[raw_num + 1].lmap_se = bufaddr;
-			}
 
 			// ae se
-			DMA_SETUP_2(raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_SE);
+			DMA_SETUP(raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_SE);
 			isp_bufpool[raw_num].sts_mem[0].ae_se.phy_addr = bufaddr;
 			isp_bufpool[raw_num].sts_mem[0].ae_se.size = bufsize;
 			isp_bufpool[raw_num].sts_mem[1].ae_se.phy_addr = _mempool_pop(bufsize);
 			isp_bufpool[raw_num].sts_mem[1].ae_se.size = bufsize;
-			ispblk_dma_config(ictx, raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_SE,
-					  isp_bufpool[raw_num].sts_mem[0].ae_se.phy_addr);
 		}
 	}
 
@@ -1890,10 +1837,10 @@ EXIT:
 
 void _isp_rgbtop_dma_setup(struct isp_ctx *ictx)
 {
-	u64 bufaddr = 0;
-	u32 bufsize = 0;
+	uint64_t bufaddr = 0;
+	uint32_t bufsize = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -1916,7 +1863,7 @@ void _isp_rgbtop_dma_setup(struct isp_ctx *ictx)
 		if (_is_right_tile(ictx, raw_num))
 			continue;
 		if (ictx->isp_pipe_cfg[raw_num].is_yuv_sensor &&
-		    ictx->isp_pipe_cfg[raw_num].yuv_scene_mode != ISP_YUV_SCENE_ISP)
+			ictx->isp_pipe_cfg[raw_num].yuv_scene_mode != ISP_YUV_SCENE_ISP)
 			continue;
 
 		if (!ictx->isp_pipe_cfg[raw_num].is_yuv_sensor) {
@@ -1937,8 +1884,9 @@ void _isp_rgbtop_dma_setup(struct isp_ctx *ictx)
 		}
 
 		// manr
-		if (ictx->is_3dnr_on)
+		if (ictx->is_3dnr_on) {
 			_isp_manr_dma_setup(ictx, raw_num);
+		}
 	}
 EXIT:
 	_isp_rgbtop_dma_dump(ictx);
@@ -1946,11 +1894,11 @@ EXIT:
 
 void _isp_yuvtop_dma_setup(struct isp_ctx *ictx)
 {
-	u64 bufaddr = 0;
-	u64 tmp_bufaddr = 0;
-	u32 bufsize = 0;
+	uint64_t bufaddr = 0;
+	uint64_t tmp_bufaddr = 0;
+	uint32_t bufsize = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -1979,13 +1927,20 @@ void _isp_yuvtop_dma_setup(struct isp_ctx *ictx)
 			continue;
 
 		// dci
-		DMA_SETUP_2(raw_num, ISP_BLK_ID_DMA_CTL_DCI);
+		DMA_SETUP(raw_num, ISP_BLK_ID_DMA_CTL_DCI);
 		isp_bufpool[raw_num].sts_mem[0].dci.phy_addr = bufaddr;
 		isp_bufpool[raw_num].sts_mem[0].dci.size = bufsize;
 		isp_bufpool[raw_num].sts_mem[1].dci.phy_addr = _mempool_pop(bufsize);
 		isp_bufpool[raw_num].sts_mem[1].dci.size = bufsize;
-		ispblk_dma_config(ictx, raw_num, ISP_BLK_ID_DMA_CTL_DCI,
-				isp_bufpool[raw_num].sts_mem[0].dci.phy_addr);
+
+		//TODO use the same buffer or not
+		if (ictx->isp_pipe_cfg[raw_num].is_tile) {
+			// dci
+			isp_bufpool[raw_num + 1].sts_mem[0].dci.phy_addr = isp_bufpool[raw_num].sts_mem[0].dci.phy_addr;
+			isp_bufpool[raw_num + 1].sts_mem[0].dci.size     = isp_bufpool[raw_num].sts_mem[0].dci.size;
+			isp_bufpool[raw_num + 1].sts_mem[1].dci.phy_addr = isp_bufpool[raw_num].sts_mem[1].dci.phy_addr;
+			isp_bufpool[raw_num + 1].sts_mem[1].dci.size     = isp_bufpool[raw_num].sts_mem[1].dci.size;
+		}
 
 		// ldci
 		//DMA_SETUP(ISP_BLK_ID_DMA_CTL_LDCI_W);
@@ -1994,14 +1949,14 @@ void _isp_yuvtop_dma_setup(struct isp_ctx *ictx)
 		bufaddr = VI_256_ALIGN(tmp_bufaddr);
 		bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_LDCI_W);
 		ispblk_dma_config(ictx, raw_num, ISP_BLK_ID_DMA_CTL_LDCI_W, bufaddr);
-		_mempool_pop(bufsize + (u32)(bufaddr - tmp_bufaddr));
+		_mempool_pop(bufsize + (uint32_t)(bufaddr - tmp_bufaddr));
 
 		isp_bufpool[raw_num].ldci = bufaddr;
 		ispblk_dma_config(ictx, raw_num, ISP_BLK_ID_DMA_CTL_LDCI_R, isp_bufpool[raw_num].ldci);
 		if (ictx->isp_pipe_cfg[raw_num].is_tile) {
 			tmp_bufaddr = _mempool_get_addr();
 			bufaddr = VI_256_ALIGN(tmp_bufaddr);
-			_mempool_pop(bufsize + (u32)(bufaddr - tmp_bufaddr));
+			_mempool_pop(bufsize + (uint32_t)(bufaddr - tmp_bufaddr));
 			isp_bufpool[raw_num + 1].ldci = bufaddr;
 		}
 	}
@@ -2029,8 +1984,8 @@ EXIT:
 
 void _isp_cmdq_dma_setup(struct isp_ctx *ictx)
 {
-	u64 bufaddr = 0;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	uint64_t bufaddr = 0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!ictx->isp_pipe_enable[raw_num])
@@ -2045,7 +2000,7 @@ void _isp_cmdq_dma_setup(struct isp_ctx *ictx)
 
 void _vi_dma_setup(struct isp_ctx *ictx)
 {
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!ictx->isp_pipe_enable[raw_num])
@@ -2151,14 +2106,14 @@ void _vi_dma_set_sw_mode(struct isp_ctx *ctx)
 	ispblk_dma_set_sw_mode(ctx, ISP_BLK_ID_DMA_CTL_LDCI_R, true); //ldci_iir_r
 }
 
-void _vi_yuv_get_dma_size(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+void _vi_yuv_get_dma_size(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
-	u32 bufsize = 0;
-	u32 base = 0, dma = 0;
-	u32 rgbmap_le = 0;
-	u8 i = 0, j = 0;
-	u8 chn_str = ctx->raw_chnstr_num[raw_num];
-	u8 total_chn = chn_str + ctx->isp_pipe_cfg[raw_num].mux_mode + 1;
+	uint32_t bufsize = 0;
+	uint32_t base = 0, dma = 0;
+	uint32_t rgbmap_le = 0;
+	uint8_t i = 0, j = 0;
+	uint8_t chn_str = ctx->raw_chnstr_num[raw_num];
+	uint8_t total_chn = chn_str + ctx->isp_pipe_cfg[raw_num].muxMode + 1;
 
 	if (ctx->isp_pipe_cfg[raw_num].is_bt_demux)
 		base = csibdg_lite_dma_find_hwid(raw_num, ISP_FE_CH0);
@@ -2193,16 +2148,19 @@ void _vi_yuv_get_dma_size(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
 	}
 }
 
-void _vi_splt_get_dma_size(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
+void _vi_splt_get_dma_size(struct isp_ctx *ictx, enum cvi_isp_raw raw_num)
 {
-	u32 bufsize = 0;
-	u32 splt_le = 0, splt_se = 0;
-	u8  i = 0;
+	uint32_t bufsize = 0;
+	uint32_t splt_le = 0, splt_se = 0;
+	uint8_t  i = 0;
+
+	//raw ai isp move to FE, abandon splt config
+	return;
 
 	if (raw_num != ISP_PRERAW0)
 		return;
 
-	if (ictx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT) {
+	if (ictx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 		splt_le = ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_LE;
 		splt_se = ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_SE;
 
@@ -2220,11 +2178,11 @@ void _vi_splt_get_dma_size(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 	}
 }
 
-void _vi_pre_fe_get_dma_size(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
+void _vi_pre_fe_get_dma_size(struct isp_ctx *ictx, enum cvi_isp_raw raw_num)
 {
-	u32 bufsize = 0;
-	u8  i = 0;
-	u8  pre_fe_buf_num = OFFLINE_RAW_BUF_NUM;
+	uint32_t bufsize = 0;
+	uint8_t  i = 0;
+	uint8_t  pre_fe_buf_num = OFFLINE_RAW_BUF_NUM;
 	u32 raw_le, raw_se;
 	u32 rgbmap_le, rgbmap_se;
 
@@ -2241,9 +2199,10 @@ void _vi_pre_fe_get_dma_size(struct isp_ctx *ictx, enum sop_isp_raw raw_num)
 	}
 
 	if (_is_be_post_online(ictx)) { //fe->dram->be->post
-		//for fe ai isp, need more buffer
-		if (ictx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_FE)
+		//for ai isp, need more buffer
+		if (ictx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 			pre_fe_buf_num += BNR_AI_ISP_BUF_NUM;
+		}
 
 		for (i = 0; i < pre_fe_buf_num; i++) {
 			bufsize = ispblk_dma_buf_get_size(ictx, raw_num, raw_le);
@@ -2287,10 +2246,10 @@ EXIT:
 
 void _vi_pre_be_get_dma_size(struct isp_ctx *ictx)
 {
-	u32 bufsize = 0;
-	u8  buf_num = 0;
+	uint32_t bufsize = 0;
+	uint8_t  buf_num = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -2374,9 +2333,9 @@ EXIT:
 
 void _vi_rawtop_get_dma_size(struct isp_ctx *ictx)
 {
-	u32 bufsize = 0;
+	uint32_t bufsize = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -2415,10 +2374,6 @@ void _vi_rawtop_get_dma_size(struct isp_ctx *ictx)
 		// lmap_le
 		bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_LMAP_LE);
 		_mempool_pop(bufsize);
-		if (ictx->isp_pipe_cfg[raw_num].is_tile) {
-			bufsize = ispblk_dma_buf_get_size(ictx, raw_num + 1, ISP_BLK_ID_DMA_CTL_LMAP_LE);
-			_mempool_pop(bufsize);
-		}
 
 		// ae le
 		bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_LE);
@@ -2429,10 +2384,6 @@ void _vi_rawtop_get_dma_size(struct isp_ctx *ictx)
 			// lmap_se
 			bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_LMAP_SE);
 			_mempool_pop(bufsize);
-			if (ictx->isp_pipe_cfg[raw_num].is_tile) {
-				bufsize = ispblk_dma_buf_get_size(ictx, raw_num + 1, ISP_BLK_ID_DMA_CTL_LMAP_SE);
-				_mempool_pop(bufsize);
-			}
 
 			// ae se
 			bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_SE);
@@ -2446,9 +2397,9 @@ EXIT:
 
 void _vi_rgbtop_get_dma_size(struct isp_ctx *ictx)
 {
-	u32 bufsize = 0;
+	uint32_t bufsize = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -2483,8 +2434,8 @@ void _vi_rgbtop_get_dma_size(struct isp_ctx *ictx)
 
 		// manr
 		if (ictx->is_3dnr_on) {
-			u64 bufaddr = 0;
-			u64 tmp_bufaddr = 0;
+			uint64_t bufaddr = 0;
+			uint64_t tmp_bufaddr = 0;
 
 			// MANR M + H
 			bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_MMAP_IIR_R);
@@ -2516,14 +2467,14 @@ void _vi_rgbtop_get_dma_size(struct isp_ctx *ictx)
 				//ring buffer constraint. reg_base is 4k byte-align
 				bufaddr = VI_4K_ALIGN(tmp_bufaddr);
 				bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_TNR_LD_Y);
-				_mempool_pop(bufsize + (u32)(bufaddr - tmp_bufaddr));
+				_mempool_pop(bufsize + (uint32_t)(bufaddr - tmp_bufaddr));
 
 				// TNR UV
 				tmp_bufaddr = _mempool_get_addr();
 				//ring buffer constraint. reg_base is 4k byte-align
 				bufaddr = VI_4K_ALIGN(tmp_bufaddr);
 				bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_TNR_LD_C);
-				_mempool_pop(bufsize + (u32)(bufaddr - tmp_bufaddr));
+				_mempool_pop(bufsize + (uint32_t)(bufaddr - tmp_bufaddr));
 			} else {
 				// TNR Y
 				bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_TNR_LD_Y);
@@ -2566,11 +2517,11 @@ EXIT:
 
 void _vi_yuvtop_get_dma_size(struct isp_ctx *ictx)
 {
-	u32 bufsize = 0;
-	u64 bufaddr = 0;
-	u64 tmp_bufaddr = 0;
+	uint32_t bufsize = 0;
+	uint64_t bufaddr = 0;
+	uint64_t tmp_bufaddr = 0;
 
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	u8 cfg_dma = false;
 
@@ -2606,22 +2557,22 @@ void _vi_yuvtop_get_dma_size(struct isp_ctx *ictx)
 		// ldci
 		bufaddr = VI_256_ALIGN(tmp_bufaddr);
 		bufsize = ispblk_dma_buf_get_size(ictx, raw_num, ISP_BLK_ID_DMA_CTL_LDCI_W);
-		_mempool_pop(bufsize + (u32)(bufaddr - tmp_bufaddr));
+		_mempool_pop(bufsize + (uint32_t)(bufaddr - tmp_bufaddr));
 
 		vi_pr(VI_INFO, "ldci bufsize: total(%d), used(%d), wasted_for_alignment(%d)\n",
-			bufsize + (u32)(bufaddr - tmp_bufaddr),
+			bufsize + (uint32_t)(bufaddr - tmp_bufaddr),
 			bufsize,
-			(u32)(bufaddr - tmp_bufaddr));
+			(uint32_t)(bufaddr - tmp_bufaddr));
 
 		if (ictx->isp_pipe_cfg[raw_num].is_tile) { //ldci right tile
 			tmp_bufaddr = _mempool_get_addr();
 			bufaddr = VI_256_ALIGN(tmp_bufaddr);
-			_mempool_pop(bufsize + (u32)(bufaddr - tmp_bufaddr));
+			_mempool_pop(bufsize + (uint32_t)(bufaddr - tmp_bufaddr));
 
 			vi_pr(VI_INFO, "ldci right tile bufsize: total(%d), used(%d), wasted_for_alignment(%d)\n",
-				bufsize + (u32)(bufaddr - tmp_bufaddr),
+				bufsize + (uint32_t)(bufaddr - tmp_bufaddr),
 				bufsize,
-				(u32)(bufaddr - tmp_bufaddr));
+				(uint32_t)(bufaddr - tmp_bufaddr));
 		}
 	}
 EXIT:
@@ -2630,8 +2581,8 @@ EXIT:
 
 void _vi_cmdq_get_dma_size(struct isp_ctx *ictx)
 {
-	u32 bufsize = 0;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	uint32_t bufsize = 0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!ictx->isp_pipe_enable[raw_num])
@@ -2644,7 +2595,7 @@ void _vi_cmdq_get_dma_size(struct isp_ctx *ictx)
 
 void _vi_get_dma_buf_size(struct isp_ctx *ictx)
 {
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!ictx->isp_pipe_enable[raw_num])
@@ -2662,11 +2613,11 @@ void _vi_get_dma_buf_size(struct isp_ctx *ictx)
 	_vi_cmdq_get_dma_size(ictx);
 }
 
-static void _vi_preraw_be_init(struct sop_vi_dev *vdev)
+static void _vi_preraw_be_init(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	u32 bps[40] = {((0 << 12) | 0), ((0 << 12) | 20), ((0 << 12) | 40), ((0 << 12) | 60)};
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	uint32_t bps[40] = {((0 << 12) | 0), ((0 << 12) | 20), ((0 << 12) | 40), ((0 << 12) | 60)};
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	u8 cfg_be = false;
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
@@ -2720,7 +2671,7 @@ static void _vi_preraw_be_init(struct sop_vi_dev *vdev)
 	}
 }
 
-static void _isp_rawtop_init(struct sop_vi_dev *vdev)
+static void _isp_rawtop_init(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ictx = &vdev->ctx;
 	u8 first_raw_num = vi_get_first_raw_num(ictx);
@@ -2769,7 +2720,7 @@ static void _isp_rawtop_init(struct sop_vi_dev *vdev)
 	}
 }
 
-static void _isp_rgbtop_init(struct sop_vi_dev *vdev)
+static void _isp_rgbtop_init(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ictx = &vdev->ctx;
 	u8 first_raw_num = vi_get_first_raw_num(ictx);
@@ -2808,7 +2759,7 @@ static void _isp_rgbtop_init(struct sop_vi_dev *vdev)
 	}
 }
 
-static void _isp_yuvtop_init(struct sop_vi_dev *vdev)
+static void _isp_yuvtop_init(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ictx = &vdev->ctx;
 	u8 first_raw_num = vi_get_first_raw_num(ictx);
@@ -2852,13 +2803,13 @@ static void _isp_yuvtop_init(struct sop_vi_dev *vdev)
 }
 
 static u32 _is_drop_next_frame(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
-	const enum sop_isp_fe_chn_num chn_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	u32 start_drop_num = ctx->isp_pipe_cfg[raw_num].drop_ref_frm_num;
-	u32 end_drop_num = start_drop_num + ctx->isp_pipe_cfg[raw_num].drop_frm_cnt;
+	uint32_t start_drop_num = ctx->isp_pipe_cfg[raw_num].drop_ref_frm_num;
+	uint32_t end_drop_num = start_drop_num + ctx->isp_pipe_cfg[raw_num].drop_frm_cnt;
 	u32 frm_num = 0;
 	u8 dev_num = 0;
 
@@ -2877,17 +2828,14 @@ static u32 _is_drop_next_frame(
 
 		if ((start_drop_num != 0) && (frm_num >= start_drop_num) && (frm_num < end_drop_num))
 			return 1;
-
-		if (ddr_need_retrain(vdev))
-			return 1;
 	}
 
 	return 0;
 }
 
 static void _set_drop_frm_info(
-	const struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	const struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	struct isp_i2c_data *i2c_data)
 {
 	struct isp_ctx *ctx = (struct isp_ctx *)(&vdev->ctx);
@@ -2903,8 +2851,8 @@ static void _set_drop_frm_info(
 }
 
 static void _clear_drop_frm_info(
-	const struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num)
+	const struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = (struct isp_ctx *)(&vdev->ctx);
 
@@ -2914,8 +2862,8 @@ static void _clear_drop_frm_info(
 }
 
 static void _snr_i2c_update(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	struct _isp_snr_i2c_node **_i2c_n,
 	const u16 _i2c_num,
 	int is_vblank_update)
@@ -2928,19 +2876,23 @@ static void _snr_i2c_update(
 	u16 i = 0, j = 0;
 	// 0: Delete Node, 1: Postpone Node, 2: Do nothing
 	u16 del_node = 0;
-	u32 dev_mask = 0;
-	//u32 cmd = burst_i2c_en ? SNS_I2C_BURST_QUEUE : SNS_I2C_WRITE;
-	u8 no_update = 1;
+	uint32_t dev_mask = 0;
+	// uint32_t cmd = burst_i2c_en ? CVI_SNS_I2C_BURST_QUEUE : CVI_SNS_I2C_WRITE;
+	CVI_BOOL no_update = CVI_TRUE;
 	u32 fe_frm_num = 0;
 
 	if (vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be || vdev->ctx.isp_pipe_cfg[raw_num].is_patgen_en)
 		return;
 
-	fe_frm_num = vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0];
+	//dual sensor case, fe/be frm_num wouldn't be the same when dump frame of rotation.
+	if (_is_be_post_online(&vdev->ctx))
+		fe_frm_num = vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0] - vdev->dump_frame_number[raw_num];
+	else
+		fe_frm_num = vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0];
 
 	for (j = 0; j < _i2c_num; j++) {
 		node = _i2c_n[j];
-		no_update = 1;
+		no_update = CVI_TRUE;
 
 		vi_pr(VI_DBG, "raw_num=%d, i2c_num=%d, j=%d, magic_num=%d, fe_frm_num=%d, v_blank_update=%d\n",
 				raw_num, _i2c_num, j, node->n.magic_num, fe_frm_num, is_vblank_update);
@@ -2965,14 +2917,14 @@ static void _snr_i2c_update(
 				if (i2c_data->update && (i2c_data->dly_frm_num == 0)) {
 					if ((i2c_data->vblank_update && is_vblank_update)
 					|| (!i2c_data->vblank_update && !is_vblank_update)) {
-						vi_snsr_i2c_write(vdev, raw_num, i2c_data);
+					vi_snsr_i2c_write(vdev, raw_num, i2c_data);
 						i2c_data->update = 0;
 						if (burst_i2c_en)
 							dev_mask |= BIT(i2c_data->i2c_dev);
 						if (i2c_data->drop_frame)
 							_set_drop_frm_info(vdev, raw_num, i2c_data);
 					} else {
-						no_update = 0;
+						no_update = CVI_FALSE;
 					}
 				} else if (i2c_data->update && !(i2c_data->dly_frm_num == 0)) {
 					vi_pr(VI_DBG, "addr=0x%x, dly_frm=%d\n",
@@ -3024,17 +2976,17 @@ static void _snr_i2c_update(
 		}
 	}
 
-	//while (dev_mask) {
-	//	u32 tmp = ffs(dev_mask) - 1;
+	// while (dev_mask) {
+	// 	uint32_t tmp = ffs(dev_mask) - 1;
 
-	//	vip_sys_cmm_cb_i2c(SNS_I2C_BURST_FIRE, (void *)&tmp);
-	//	dev_mask &= ~BIT(tmp);
-	//}
+	// 	vip_sys_cmm_cb_i2c(CVI_SNS_I2C_BURST_FIRE, (void *)&tmp);
+	// 	dev_mask &= ~BIT(tmp);
+	// }
 }
 
 static void _isp_snr_cfg_deq_and_fire(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	int needvblank)
 {
 	struct list_head *pos, *temp;
@@ -3068,7 +3020,7 @@ static void _isp_snr_cfg_deq_and_fire(
 	_snr_i2c_update(vdev, raw_num, i2c_n, i2c_num, needvblank);
 }
 
-static inline void _vi_clear_mmap_fbc_ring_base(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _vi_clear_mmap_fbc_ring_base(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 
@@ -3083,7 +3035,7 @@ static inline void _vi_clear_mmap_fbc_ring_base(struct sop_vi_dev *vdev, const e
 	}
 }
 
-static inline void _vi_wake_up_preraw_th(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _vi_wake_up_preraw_th(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	unsigned long flags;
 	struct _isp_raw_num_n *n;
@@ -3105,10 +3057,10 @@ static inline void _vi_wake_up_preraw_th(struct sop_vi_dev *vdev, const enum sop
 
 static void _usr_pic_timer_handler(unsigned long data)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)usr_pic_timer.data;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)usr_pic_timer.data;
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct isp_buffer *b = NULL;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	s8 s8Ret = ISP_SUCCESS;
 
 	if (!(ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe || ctx->isp_pipe_cfg[raw_num].is_raw_replay_be))
@@ -3136,11 +3088,11 @@ static void _usr_pic_timer_handler(unsigned long data)
 
 		if (ctx->isp_pipe_cfg[raw_num].is_tile) {
 			//reconfig rdma for tile dma
-			u32 splt_fe0_le = ISP_BLK_ID_DMA_CTL_SPLT_FE0_RDMA_LE;
-			u32 splt_fe0_se = ISP_BLK_ID_DMA_CTL_SPLT_FE0_RDMA_SE;
-			u32 splt_fe1_le = ISP_BLK_ID_DMA_CTL_SPLT_FE1_RDMA_LE;
-			u32 splt_fe1_se = ISP_BLK_ID_DMA_CTL_SPLT_FE1_RDMA_SE;
-			u64 dma_addr = 0;
+			uint32_t splt_fe0_le = ISP_BLK_ID_DMA_CTL_SPLT_FE0_RDMA_LE;
+			uint32_t splt_fe0_se = ISP_BLK_ID_DMA_CTL_SPLT_FE0_RDMA_SE;
+			uint32_t splt_fe1_le = ISP_BLK_ID_DMA_CTL_SPLT_FE1_RDMA_LE;
+			uint32_t splt_fe1_se = ISP_BLK_ID_DMA_CTL_SPLT_FE1_RDMA_SE;
+			uint64_t dma_addr = 0;
 
 			if (atomic_read(&vdev->postraw_state) != ISP_STATE_IDLE)
 				goto EXIT;
@@ -3222,18 +3174,28 @@ static void _usr_pic_timer_handler(unsigned long data)
 	}
 
 EXIT:
+#if (KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE)
 	mod_timer(&usr_pic_timer.t, jiffies + vdev->usr_pic_delay);
+#else
+	mod_timer(&usr_pic_timer, jiffies + vdev->usr_pic_delay);
+#endif
 }
 
 void usr_pic_time_remove(void)
 {
+#if (KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE)
 	if (timer_pending(&usr_pic_timer.t)) {
 		del_timer_sync(&usr_pic_timer.t);
 		timer_setup(&usr_pic_timer.t, legacy_timer_emu_func, 0);
+#else
+	if (timer_pending(&usr_pic_timer)) {
+		del_timer_sync(&usr_pic_timer);
+		init_timer(&usr_pic_timer);
+#endif
 	}
 }
 
-int usr_pic_timer_init(struct sop_vi_dev *vdev)
+int usr_pic_timer_init(struct cvi_vi_dev *vdev)
 {
 #ifdef PORTING_TEST
 	usr_trigger = true;
@@ -3241,8 +3203,13 @@ int usr_pic_timer_init(struct sop_vi_dev *vdev)
 	usr_pic_time_remove();
 	usr_pic_timer.function = _usr_pic_timer_handler;
 	usr_pic_timer.data = (uintptr_t)vdev;
+#if (KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE)
 	usr_pic_timer.t.expires = jiffies + vdev->usr_pic_delay;
 	add_timer(&usr_pic_timer.t);
+#else
+	usr_pic_timer.expires = jiffies + vdev->usr_pic_delay;
+	add_timer(&usr_pic_timer);
+#endif
 
 	return 0;
 }
@@ -3258,11 +3225,13 @@ void _isp_v4l2_event_queue(
 	v4l2_event_queue(vfd, &event);
 }
 
-void vi_event_queue(struct sop_vi_dev *vdev, const u32 type, const u32 frm_num)
+void vi_event_queue(struct cvi_vi_dev *vdev, const u32 type, const u32 frm_num)
 {
 	unsigned long flags;
 	struct vi_event_k *ev_k;
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
 	struct timespec64 ts;
+#endif
 
 	if (type >= VI_EVENT_MAX) {
 		vi_pr(VI_ERR, "event queue type(%d) error\n", type);
@@ -3279,10 +3248,13 @@ void vi_event_queue(struct sop_vi_dev *vdev, const u32 type, const u32 frm_num)
 	ev_k->ev.type = type;
 	ev_k->ev.frame_sequence = frm_num;
 
+#if (KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE)
 	ts = ktime_to_timespec64(ktime_get());
 	ev_k->ev.timestamp.tv_sec = ts.tv_sec;
 	ev_k->ev.timestamp.tv_nsec = ts.tv_nsec;
-
+#else
+	ev_k->ev.timestamp = ktime_to_timeval(ktime_get());
+#endif
 	list_add_tail(&ev_k->list, &event_q.list);
 	spin_unlock_irqrestore(&event_lock, flags);
 
@@ -3291,7 +3263,7 @@ void vi_event_queue(struct sop_vi_dev *vdev, const u32 type, const u32 frm_num)
 	_isp_v4l2_event_queue(&vdev->vnode[0].vdev, type, frm_num);
 }
 
-void sop_isp_dqbuf_list(struct sop_vi_dev *vdev, const u32 frm_num, const u8 chn_id)
+void cvi_isp_dqbuf_list(struct cvi_vi_dev *vdev, const u32 frm_num, const u8 chn_id)
 {
 	unsigned long flags;
 	struct _isp_dqbuf_n *n;
@@ -3305,48 +3277,22 @@ void sop_isp_dqbuf_list(struct sop_vi_dev *vdev, const u32 frm_num, const u8 chn
 	n->frm_num	= frm_num;
 	n->timestamp	= ktime_to_timespec64(ktime_get());
 
-	spin_lock_irqsave(&dq_lock[chn_id], flags);
+	spin_lock_irqsave(&dq_lock, flags);
 	list_add_tail(&n->list, &dqbuf_q[chn_id].list);
-	spin_unlock_irqrestore(&dq_lock[chn_id], flags);
+	spin_unlock_irqrestore(&dq_lock, flags);
 }
 
-
-static int _isp_yuv_get_buf_chn(struct isp_ctx *ctx,
-				const enum sop_isp_raw actual_raw,
-				const u8 hw_chn_num)
-{
-	u8 vir_raw;
-	u8 buf_chn;
-
-	for (vir_raw = 0; vir_raw < ISP_PRERAW_MAX; vir_raw++)
-		if (actual_raw == ctx->isp_bind_info[vir_raw].bind_fe_num)
-			break;
-
-	if (ctx->isp_pipe_cfg[vir_raw].is_yuv_sensor)
-		buf_chn = vir_raw + hw_chn_num;
-	else
-		buf_chn = vir_raw;
-
-	if (buf_chn >= VI_MAX_CHN_NUM) {
-		vi_pr(VI_ERR, "buf_chn(%d) out of limit\n", buf_chn);
-		buf_chn = actual_raw;
-	}
-
-	return buf_chn;
-}
-
-static void _isp_yuv_bypass_buf_enq(struct sop_vi_dev *vdev,
-				    const enum sop_isp_raw raw_num, const u8 hw_chn_num)
+static void _isp_yuv_bypass_buf_enq(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num, const u8 buf_chn)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	struct sop_isp_buf *b = NULL;
+	struct cvi_isp_buf *b = NULL;
 	struct vb2_buffer *vb2_buf;
-	enum isp_blk_id_t dmaid;
+	enum ISP_BLK_ID_T dmaid;
 	u64 tmp_addr = 0, i = 0;
-	u8 buf_chn = _isp_yuv_get_buf_chn(ctx, raw_num, hw_chn_num);
+	u8 hw_chn_num = buf_chn - ctx->raw_chnstr_num[raw_num];
 
-	sop_isp_rdy_buf_pop(vdev, buf_chn);
-	b = sop_isp_rdy_buf_next(vdev, buf_chn);
+	cvi_isp_rdy_buf_pop(vdev, buf_chn);
+	b = cvi_isp_rdy_buf_next(vdev, buf_chn);
 	if (b == NULL)
 		return;
 
@@ -3354,7 +3300,7 @@ static void _isp_yuv_bypass_buf_enq(struct sop_vi_dev *vdev,
 
 	tmp_addr = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
 
-	vi_pr(VI_DBG, "update dev_%d yuv bypass outbuf: 0x%llx\n", buf_chn, tmp_addr);
+	vi_pr(VI_DBG, "update chn[%d] yuv bypass outbuf: 0x%llx\n", buf_chn, tmp_addr);
 
 	if (ctx->isp_pipe_cfg[raw_num].is_bt_demux)
 		dmaid = csibdg_lite_dma_find_hwid(raw_num, hw_chn_num);
@@ -3377,9 +3323,10 @@ static void _isp_yuv_bypass_buf_enq(struct sop_vi_dev *vdev,
 	}
 }
 
-static void _isp_yuv_bypass_trigger(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num, const u8 hw_chn_num)
+static void _isp_yuv_bypass_trigger(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num, const u8 hw_chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
+	u8 buf_chn;
 
 	if (atomic_read(&vdev->isp_err_handle_flag) == 1)
 		return;
@@ -3391,16 +3338,17 @@ static void _isp_yuv_bypass_trigger(struct sop_vi_dev *vdev, const enum sop_isp_
 			vi_pr(VI_DBG, "fe_%d chn_num_%d is running\n", raw_num, hw_chn_num);
 			return;
 		}
+		buf_chn = ctx->raw_chnstr_num[raw_num] + hw_chn_num;
 
-		_isp_yuv_bypass_buf_enq(vdev, raw_num, hw_chn_num);
+		_isp_yuv_bypass_buf_enq(vdev, raw_num, buf_chn);
 		isp_pre_trig(ctx, raw_num, hw_chn_num);
 	}
 }
 
-void _vi_postraw_ctrl_setup(struct sop_vi_dev *vdev)
+void _vi_postraw_ctrl_setup(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num;
+	enum cvi_isp_raw raw_num;
 	u8 cfg_post = false;
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
@@ -3423,25 +3371,24 @@ void _vi_postraw_ctrl_setup(struct sop_vi_dev *vdev)
 	ispblk_isptop_config(ctx);
 }
 
-void _vi_pre_fe_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
+void _vi_pre_fe_ctrl_setup(struct cvi_vi_dev *vdev, enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ictx = &vdev->ctx;
 	u32 blc_le_id, blc_se_id, rgbmap_le_id, rgbmap_se_id, wbg_le_id, wbg_se_id;
 	struct cif_yuv_swap_s swap = {0};
 
 	if (ictx->isp_pipe_cfg[raw_num].is_yuv_sensor) {//YUV sensor
-		u8 actual_raw = vdev->ctx.isp_bind_info[raw_num].bind_fe_num;
 		if (ictx->isp_pipe_cfg[raw_num].is_422_to_420) {//uyvy to yuyv to 420
 			swap.devno = raw_num;
 			swap.yc_swap = 1;
 			swap.uv_swap = 1;
-			// _vi_call_cb(E_MODULE_CIF, MIPI_SET_YUV_SWAP, &swap);
+			// _vi_call_cb(E_MODULE_CIF, CVI_MIPI_SET_YUV_SWAP, &swap);
 		}
 
 		if (ictx->isp_pipe_cfg[raw_num].is_bt_demux)
 			ispblk_csibdg_lite_config(ictx, raw_num);
 		else {
-			ispblk_csibdg_yuv_bypass_config(ictx, actual_raw);
+			ispblk_csibdg_yuv_bypass_config(ictx, raw_num);
 			if (ictx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_ISP) {
 				switch (raw_num) {
 				case ISP_PRERAW0:
@@ -3479,17 +3426,11 @@ void _vi_pre_fe_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
 		}
 
 		if (ictx->isp_pipe_cfg[raw_num].is_offline_scaler) { //vi vpss offline mode
-			u8 chn_str = 0;
-			u8 total_chn = chn_str + ictx->isp_pipe_cfg[actual_raw].mux_mode + 1;
-			if (raw_num != ISP_PRERAW0) {
-				if (actual_raw == ictx->isp_bind_info[raw_num - 1].bind_fe_num)
-					return;
-			}
-			vi_pr(VI_INFO, "yuv buffer enque fe_%d chn_num[%d]\n", actual_raw, total_chn);
-			for (; chn_str < total_chn; chn_str++) {
-				ictx->isp_bind_info[raw_num + chn_str].hw_chn = chn_str;
-				_isp_yuv_bypass_buf_enq(vdev, actual_raw, chn_str);
-			}
+			uint8_t chn_str = ictx->raw_chnstr_num[raw_num];
+			uint8_t total_chn = chn_str + ictx->isp_pipe_cfg[raw_num].muxMode + 1;
+
+			for (; chn_str < total_chn; chn_str++)
+				_isp_yuv_bypass_buf_enq(vdev, raw_num, chn_str);
 		}
 	} else { //RGB sensor
 		switch (raw_num) {
@@ -3571,7 +3512,7 @@ void _vi_pre_fe_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
 	}
 }
 
-void _vi_splt_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
+void _vi_splt_ctrl_setup(struct cvi_vi_dev *vdev, enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 
@@ -3579,7 +3520,6 @@ void _vi_splt_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
 		return;
 
 	if (ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe ||
-	    ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT ||
 	    ctx->isp_pipe_cfg[raw_num].is_tile ||
 	    line_spliter_en) {
 		ispblk_splt_config(ctx, raw_num, true);
@@ -3600,17 +3540,6 @@ void _vi_splt_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
 		ispblk_splt_rdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE1_RDMA_SE,
 						ctx->isp_pipe_cfg[raw_num].is_tile &&
 						ctx->isp_pipe_cfg[raw_num].is_hdr_on);
-	} else if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT) {
-		ispblk_splt_wdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE0_WDMA, true);
-		ispblk_splt_wdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE1_WDMA,
-					     ctx->isp_pipe_cfg[raw_num].is_tile);
-
-		// rdma have no data at first frame
-		ispblk_splt_rdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE0_RDMA_LE, false);
-		ispblk_splt_rdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE0_RDMA_SE, false);
-
-		ispblk_splt_rdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE1_RDMA_LE, false);
-		ispblk_splt_rdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE1_RDMA_SE, false);
 	} else {
 		ispblk_splt_wdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE0_WDMA, false);
 		ispblk_splt_wdma_ctrl_config(ctx, ISP_BLK_ID_SPLT_FE1_WDMA, false);
@@ -3623,11 +3552,11 @@ void _vi_splt_ctrl_setup(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
 	}
 }
 
-void _vi_ctrl_init(enum sop_isp_raw raw_num, struct sop_vi_dev *vdev)
+void _vi_ctrl_init(enum cvi_isp_raw raw_num, struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ictx = &vdev->ctx;
 	bool is_ctrl_inited = true;
-	u8 first_raw_num = vi_get_first_raw_num(ictx);
+	uint8_t first_raw_num = vi_get_first_raw_num(ictx);
 
 	if (ictx->is_ctrl_inited)
 		return;
@@ -3657,6 +3586,10 @@ void _vi_ctrl_init(enum sop_isp_raw raw_num, struct sop_vi_dev *vdev)
 
 		ictx->rgb_color_mode[raw_num] = vdev->snr_info[raw_num].color_mode;
 
+		if ((ictx->rgb_color_mode[raw_num] >= ISP_BAYER_TYPE_GRGBI) &&
+		    (ictx->rgb_color_mode[raw_num] <= ISP_BAYER_TYPE_IGBGR)) {
+			ictx->isp_pipe_cfg[raw_num].is_rgbir_sensor = true;
+		}
 		vi_pr(VI_INFO, "csibdg_w_h(%d:%d) max_w_h(%d:%d) crop_w_h(%d:%d)\n",
 			ictx->isp_pipe_cfg[raw_num].csibdg_width, ictx->isp_pipe_cfg[raw_num].csibdg_height,
 			ictx->isp_pipe_cfg[raw_num].max_width, ictx->isp_pipe_cfg[raw_num].max_height,
@@ -3681,6 +3614,13 @@ void _vi_ctrl_init(enum sop_isp_raw raw_num, struct sop_vi_dev *vdev)
 		ictx->isp_pipe_cfg[raw_num].max_height    = vdev->usr_fmt.height;
 
 		ictx->rgb_color_mode[raw_num] = vdev->usr_fmt.code;
+
+		ictx->isp_pipe_cfg[raw_num].is_hdr_on = false;
+		vdev->ctx.is_hdr_on = false;
+		vi_pr(VI_INFO, "csi_bdg=%d:%d, post_crop=%d:%d:%d:%d\n",
+				vdev->usr_fmt.width, vdev->usr_fmt.height,
+				vdev->usr_crop.width, vdev->usr_crop.height,
+				vdev->usr_crop.left, vdev->usr_crop.top);
 	}
 
 	ictx->isp_pipe_cfg[raw_num].post_img_w = ictx->isp_pipe_cfg[raw_num].crop.w;
@@ -3709,7 +3649,6 @@ void _vi_ctrl_init(enum sop_isp_raw raw_num, struct sop_vi_dev *vdev)
 		ictx->isp_pipe_cfg[raw_num].max_width, ictx->isp_pipe_cfg[raw_num].max_height,
 		ictx->isp_pipe_cfg[raw_num].crop.x, ictx->isp_pipe_cfg[raw_num].crop.y,
 		ictx->isp_pipe_cfg[raw_num].crop.w, ictx->isp_pipe_cfg[raw_num].crop.h);
-
 	if (raw_num == first_raw_num) {
 		if (_is_fe_be_online(ictx) && ictx->is_slice_buf_on)
 			vi_calculate_slice_buf_setting(ictx, raw_num);
@@ -3730,16 +3669,17 @@ void _vi_ctrl_init(enum sop_isp_raw raw_num, struct sop_vi_dev *vdev)
 		ictx->is_ctrl_inited = true;
 }
 
-void _vi_scene_ctrl(struct sop_vi_dev *vdev)
+void _vi_scene_ctrl(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
-	u8 rgb_snsr_num = 0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
+	uint8_t rgb_snsr_num = 0;
 
-	if (ctx->is_ctrl_inited)
+	if (ctx->is_ctrl_inited) {
 		return;
+	}
 
-	if (g_vi_ctx->total_dev_num >= 2) { //Multi sensor scenario
+	if (gViCtx->total_dev_num >= 2) { //Multi sensor scenario
 		ctx->is_multi_sensor = true;
 
 		for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
@@ -3753,14 +3693,24 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 			ctx->is_offline_be = true;
 			ctx->is_offline_postraw = false;
 			ctx->is_slice_buf_on = false;
-
-			RGBMAP_BUF_IDX = 3;
+			/*
+			// if 422to420, chnAttr must be NV21
+			if (ctx->isp_pipe_cfg[ISP_PRERAW1].muxMode == VI_WORK_MODE_1Multiplex &&
+				gViCtx->chnAttr[ctx->rawb_chnstr_num].enPixelFormat == PIXEL_FORMAT_NV21)
+				ctx->isp_pipe_cfg[ISP_PRERAW1].is_422_to_420  = true;
+			*/
+			RGBMAP_BUF_IDX = 2;
 		} else {
 			ctx->is_offline_be = true;
 			ctx->is_offline_postraw = false;
 			ctx->is_slice_buf_on = false;
 			ctx->is_fbc_on = false;
-
+			/*
+			if (ctx->isp_pipe_cfg[ISP_PRERAW2].is_yuv_sensor &&
+				ctx->isp_pipe_cfg[ISP_PRERAW2].muxMode == VI_WORK_MODE_1Multiplex &&
+				gViCtx->chnAttr[ctx->rawb_chnstr_num].enPixelFormat == PIXEL_FORMAT_NV21)
+				ctx->isp_pipe_cfg[ISP_PRERAW2].is_422_to_420  = true;
+			*/
 			//Only single sensor with non-tile can use two rgbmap buf, two sensors need 3 rgbmap
 			RGBMAP_BUF_IDX = 3;
 		}
@@ -3781,7 +3731,7 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 				ctx->isp_pipe_cfg[raw_num + 1].is_tile = true;
 			} else if (vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w <= 4608 &&
 				   vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h <= 2160) {
-				// ctx->is_slice_buf_on = true;
+				ctx->is_slice_buf_on = false;
 			}
 
 			if (ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe ||
@@ -3804,9 +3754,9 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 			ctx->isp_pipe_cfg[raw_num].is_offline_scaler = true;
 			ctx->isp_pipe_cfg[raw_num].is_422_to_420  = false;
 
-			if (ctx->isp_pipe_cfg[raw_num].mux_mode > 0 &&
-			    ctx->isp_pipe_cfg[raw_num].inf_mode >= VI_MODE_BT656 &&
-			    ctx->isp_pipe_cfg[raw_num].inf_mode <= VI_MODE_BT1120_INTERLEAVED) {
+			if (ctx->isp_pipe_cfg[raw_num].muxMode > 0 &&
+			    ctx->isp_pipe_cfg[raw_num].infMode >= VI_MODE_BT656 &&
+			    ctx->isp_pipe_cfg[raw_num].infMode <= VI_MODE_BT1120_INTERLEAVED) {
 				ctx->isp_pipe_cfg[raw_num].is_bt_demux = true;
 				if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_ISP) {
 					vi_pr(VI_WARN, "bt_demux sensor switch scene_mode to YUV_SCENE_ONLINE\n");
@@ -3827,8 +3777,6 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 			    (tile_en)) {
 				ctx->is_tile = true;
 				ctx->is_fbc_on = false;
-				ctx->is_offline_be = true;
-				ctx->is_offline_postraw = false;
 				ctx->isp_pipe_cfg[raw_num].is_tile = true;
 				ctx->isp_pipe_cfg[raw_num + 1].is_tile = true;
 			}
@@ -3853,9 +3801,9 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 			line_spliter_en = 0;
 		} else if (ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe ||
 			   ctx->isp_pipe_cfg[raw_num].is_raw_replay_be ||
-			   ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap ||
+			   ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp ||
 			   ctx->isp_pipe_cfg[raw_num].is_tile) {
-			vi_pr(VI_WARN, "already on line spliter mode!\n");
+			vi_pr(VI_WARN, "raw_raplay/ai_isp_raw/tile mode is already on line spliter mode!\n");
 			line_spliter_en = 0;
 		}
 
@@ -3878,9 +3826,6 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
 
-		if (_is_right_tile(ctx, raw_num))
-			continue;
-
 		ctx->raw_chnstr_num[raw_num] = ctx->total_chn_num;
 
 		if (!ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) {
@@ -3889,29 +3834,27 @@ void _vi_scene_ctrl(struct sop_vi_dev *vdev)
 			vi_pr(VI_INFO, "raw_num=%d, rgb, chnstr_num=%d\n",
 					raw_num, ctx->raw_chnstr_num[raw_num]);
 		} else {
-			u8 actual_raw = vdev->ctx.isp_bind_info[raw_num].bind_fe_num;
-			ctx->total_chn_num++;
+			ctx->total_chn_num += ctx->isp_pipe_cfg[raw_num].muxMode + 1;
 
-			vi_pr(VI_INFO, "pipe=%d, yuv, chnstr_num=%d, mux_chn=%d\n",
+			vi_pr(VI_INFO, "raw_num=%d, yuv, chnstr_num=%d, chn_num=%d\n",
 					raw_num, ctx->raw_chnstr_num[raw_num],
-					ctx->isp_pipe_cfg[actual_raw].mux_mode + 1);
+					ctx->isp_pipe_cfg[raw_num].muxMode + 1);
 		}
 	}
 
 	vi_pr(VI_INFO, "Total_chn_num=%d, is_multi_sensor[%d]\n", ctx->total_chn_num, ctx->is_multi_sensor);
 }
 
-static void _vi_suspend(struct sop_vi_dev *vdev)
+static void _vi_suspend(struct cvi_vi_dev *vdev)
 {
-	struct sop_vi_ctx *vi_proc_ctx = NULL;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	struct cvi_vi_ctx *pviProcCtx = NULL;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
-	vi_proc_ctx = (struct sop_vi_ctx *)(vdev->shared_mem);
+	pviProcCtx = (struct cvi_vi_ctx *)(vdev->shared_mem);
 
-	if (vi_proc_ctx->vi_stt == VI_SUSPEND) {
+	if (pviProcCtx->vi_stt == VI_SUSPEND) {
 		for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++)
 			isp_streaming(&vdev->ctx, false, raw_num);
-
 		_vi_sw_init(vdev);
 #ifndef FPGA_PORTING
 		_vi_clk_ctrl(vdev, false);
@@ -3919,26 +3862,23 @@ static void _vi_suspend(struct sop_vi_dev *vdev)
 	}
 }
 
-static int _vi_resume(struct sop_vi_dev *vdev)
+static int _vi_resume(struct cvi_vi_dev *vdev)
 {
-	struct sop_vi_ctx *vi_proc_ctx = NULL;
+	struct cvi_vi_ctx *pviProcCtx = NULL;
 
-	vi_proc_ctx = (struct sop_vi_ctx *)(vdev->shared_mem);
+	pviProcCtx = (struct cvi_vi_ctx *)(vdev->shared_mem);
 
-	if (vi_proc_ctx->vi_stt == VI_SUSPEND) {
-		//_vi_mempool_reset();
-		//sop_isp_sw_init(vdev);
-
-		vi_proc_ctx->vi_stt = VI_RUNNING;
+	if (pviProcCtx->vi_stt == VI_SUSPEND) {
+		pviProcCtx->vi_stt = VI_RUNNING;
 	}
 
 	return 0;
 }
 
-void _vi_bw_cal_set(struct sop_vi_dev *vdev)
+void _viBWCalSet(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	struct sop_vi_ctx *vi_proc_ctx = NULL;
+	struct cvi_vi_ctx *pviProcCtx = NULL;
 	void __iomem *bw_limiter;
 	u64 bwladdr[ISP_BW_LIMIT_MAX] = {0x0A074020, 0x0A072020, 0x0A078020}; // rdma, wdma0, wdma1
 	u32 data_size[ISP_BW_LIMIT_MAX] = {0}, BW[ISP_PRERAW_MAX][ISP_BW_LIMIT_MAX] = {0};
@@ -3946,16 +3886,16 @@ void _vi_bw_cal_set(struct sop_vi_dev *vdev)
 	u32 def_bwltxn = 4, def_fps = 25;
 	u32 width, height;
 	u8 i, yuv_chn_num;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
-	vi_proc_ctx = (struct sop_vi_ctx *)(vdev->shared_mem);
+	pviProcCtx = (struct cvi_vi_ctx *)(vdev->shared_mem);
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!ctx->isp_pipe_enable[raw_num])
 			continue;
 
-		fps = vi_proc_ctx->dev_attr[raw_num].snr_fps ?
-			vi_proc_ctx->dev_attr[raw_num].snr_fps :
+		fps = pviProcCtx->devAttr[raw_num].snrFps ?
+			pviProcCtx->devAttr[raw_num].snrFps :
 			def_fps;
 		width = ctx->isp_pipe_cfg[raw_num].crop.w;
 		height = ctx->isp_pipe_cfg[raw_num].crop.h;
@@ -3971,14 +3911,15 @@ void _vi_bw_cal_set(struct sop_vi_dev *vdev)
 				data_size[ISP_BW_LIMIT_WDMA1] = (394 * width * height) / 128 + 38496;
 			}
 		} else { //YUV sensor
-			yuv_chn_num = ctx->isp_pipe_cfg[raw_num].mux_mode + 1;
+			yuv_chn_num = ctx->isp_pipe_cfg[raw_num].muxMode + 1;
 			data_size[ISP_BW_LIMIT_RDMA] = (192 * yuv_chn_num * width * height) / 128;
 			data_size[ISP_BW_LIMIT_WDMA0] = (192 * yuv_chn_num * width * height) / 128;
 			data_size[ISP_BW_LIMIT_WDMA1] = 0;
 		}
 
-		for (i = 0; i < ISP_BW_LIMIT_MAX; ++i)
+		for (i = 0; i < ISP_BW_LIMIT_MAX; ++i) {
 			BW[raw_num][i] = (fps * data_size[i]) / 1000000 + 1;
+		}
 	}
 
 	// TODO
@@ -3987,8 +3928,9 @@ void _vi_bw_cal_set(struct sop_vi_dev *vdev)
 	for (i = 0; i < 1; ++i) {
 		total_bw = 0;
 
-		for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++)
+		for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 			total_bw += BW[raw_num][i];
+		}
 
 		for (bwltxn = def_bwltxn; bwltxn > 1; --bwltxn) {
 			bwlwin = bwltxn * 256000 / ((((total_bw * 33) / 10) * margin) / 100);
@@ -4005,35 +3947,9 @@ void _vi_bw_cal_set(struct sop_vi_dev *vdev)
 	}
 }
 
-static void _vi_splt_set_all_state(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw hw_raw_num,
-	const enum sop_isp_state splt_state)
+int vi_start_streaming(struct cvi_vi_dev *vdev)
 {
-	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = hw_raw_num;
-
-	vi_pr(VI_DBG, "splt_%d, %s\n", raw_num,
-			(splt_state == ISP_STATE_IDLE) ? "ISP_STATE_IDLE" :
-			(splt_state == ISP_STATE_RUNNING) ? "ISP_STATE_RUNNING" : "ISP_STATE_PREPARE");
-
-	if (_is_right_tile(ctx, raw_num))
-		raw_num = ISP_PRERAW0;
-
-	atomic_set(&vdev->splt_state[raw_num][ISP_FE_CH0], splt_state);
-	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
-		atomic_set(&vdev->splt_state[raw_num][ISP_FE_CH1], splt_state);
-
-	if (ctx->isp_pipe_cfg[raw_num].is_tile) {
-		atomic_set(&vdev->splt_state[raw_num + 1][ISP_FE_CH0], splt_state);
-		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
-			atomic_set(&vdev->splt_state[raw_num + 1][ISP_FE_CH1], splt_state);
-	}
-}
-
-int vi_start_streaming(struct sop_vi_dev *vdev)
-{
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	int rc = 0;
 
 	vi_pr(VI_INFO, "+\n");
@@ -4056,9 +3972,8 @@ int vi_start_streaming(struct sop_vi_dev *vdev)
 		isp_streaming(&vdev->ctx, false, raw_num);
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
-		if (vdev->ctx.isp_pipe_cfg[raw_num].raw_ai_isp_ap) {
-			vi_pr(VI_INFO, "raw_%d ai isp access point:%d\n",
-			      raw_num, vdev->ctx.isp_pipe_cfg[raw_num].raw_ai_isp_ap);
+		if (vdev->ctx.isp_pipe_cfg[raw_num].is_raw_ai_isp) {
+			vi_pr(VI_INFO, "raw_num_%d is raw_ai_isp\n", raw_num);
 			++vdev->tpu_thread_num;
 			if (vdev->tpu_thread_num == 1) {
 				vdev->tpu_thd_bind[raw_num] = E_VI_TH_RUN_TPU1;
@@ -4069,21 +3984,19 @@ int vi_start_streaming(struct sop_vi_dev *vdev)
 				break;
 			}
 
-			if (vi_create_thread(vdev, vdev->tpu_thd_bind[raw_num]))
+			if (vi_create_thread(vdev, vdev->tpu_thd_bind[raw_num])) {
 				vi_pr(VI_ERR, "Failed to create tpu thread\n");
+			}
 		}
 	}
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		atomic_set(&vdev->post_dq_flag[raw_num], 1);
 		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
-
-		atomic_set(&vdev->post_dq_flag[raw_num], 1);
-		vi_pr(VI_INFO, "pipe_enable_%d, hdr(%d),stagger_vsync(%d) off_scaler(%d)\n",
-		      raw_num,
-		      vdev->ctx.isp_pipe_cfg[raw_num].is_hdr_on,
-		      vdev->ctx.isp_pipe_cfg[raw_num].is_stagger_vsync,
-		      vdev->ctx.isp_pipe_cfg[raw_num].is_offline_scaler);
+		vi_pr(VI_INFO, "pipe_enable_%d, hdr(%d),stagger_vsync(%d)\n", raw_num,
+				vdev->ctx.isp_pipe_cfg[raw_num].is_hdr_on,
+				vdev->ctx.isp_pipe_cfg[raw_num].is_stagger_vsync);
 
 		if (raw_num == ISP_PRERAW0) {
 			_vi_splt_ctrl_setup(vdev, raw_num);
@@ -4105,19 +4018,17 @@ int vi_start_streaming(struct sop_vi_dev *vdev)
 		}
 
 		if (!vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_fe &&
-		    !vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be &&
-		     vdev->ctx.isp_pipe_cfg[raw_num].raw_ai_isp_ap != RAW_AI_ISP_SPLT) {
+		    !vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be) {
 			if (!vdev->ctx.isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB sensor
 				isp_pre_trig(&vdev->ctx, raw_num, ISP_FE_CH0);
 				if (vdev->ctx.isp_pipe_cfg[raw_num].is_hdr_on)
 					isp_pre_trig(&vdev->ctx, raw_num, ISP_FE_CH1);
 			} else { //YUV sensor
 				u8 chn_str = 0;
-				u8 actual_raw = vdev->ctx.isp_bind_info[raw_num].bind_fe_num;
-				u8 total_chn = vdev->ctx.isp_pipe_cfg[actual_raw].mux_mode + 1;
+				u8 total_chn = vdev->ctx.isp_pipe_cfg[raw_num].muxMode + 1;
 
 				for (; chn_str < total_chn; chn_str++)
-					isp_pre_trig(&vdev->ctx, actual_raw, chn_str);
+					isp_pre_trig(&vdev->ctx, raw_num, chn_str);
 			}
 		}
 	}
@@ -4152,17 +4063,14 @@ int vi_start_streaming(struct sop_vi_dev *vdev)
 		if (!vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be &&
 		    !vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_fe) { //not rawreplay
 			if (vdev->ctx.isp_pipe_cfg[raw_num].is_tile ||
-			    vdev->ctx.isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT ||
 			    line_spliter_en) {
 				isp_splt_trig(&vdev->ctx, raw_num);
-				if (vdev->ctx.isp_pipe_cfg[raw_num].raw_ai_isp_ap)
-					_vi_splt_set_all_state(vdev, raw_num, ISP_STATE_PREPARE);
 			}
 		}
 	}
 
 #ifndef PORTING_TEST
-	//_vi_bw_cal_set(vdev);
+	// _viBWCalSet(vdev);
 #endif
 
 #ifdef PORTING_TEST
@@ -4170,27 +4078,30 @@ int vi_start_streaming(struct sop_vi_dev *vdev)
 #endif
 
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
-		u8 actual_raw = vdev->ctx.isp_bind_info[raw_num].bind_fe_num;
 		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
-		isp_streaming(&vdev->ctx, true, actual_raw);
+		isp_streaming(&vdev->ctx, true, raw_num);
 	}
 
 	atomic_set(&vdev->isp_streamoff, 0);
+
+	vi_pr(VI_DBG, "-\n");
 
 	return rc;
 }
 
 /* abort streaming and wait for last buffer */
-int vi_stop_streaming(struct sop_vi_dev *vdev)
+int vi_stop_streaming(struct cvi_vi_dev *vdev)
 {
+	// struct cvi_isp_buf *cvi_vb, *tmp;
+	// struct vb2_buffer *vb2_buf;
 	struct _isp_dqbuf_n *n = NULL;
 	struct vi_event_k   *ev_k = NULL;
 	unsigned long flags;
 	struct isp_buffer *isp_b;
 	struct _isp_snr_i2c_node *i2c_n;
 	struct _isp_raw_num_n    *raw_n;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	u8 i = 0, j = 0, count = 10;
 	u8 rc = 0;
 
@@ -4279,6 +4190,38 @@ int vi_stop_streaming(struct sop_vi_dev *vdev)
 				atomic_read(&vdev->postraw_state));
 	}
 
+#if 0
+	for (i = 0; i < 2; i++) {
+		/*
+		 * Release all the buffers enqueued to driver
+		 * when streamoff is issued
+		 */
+		spin_lock_irqsave(&vdev->rdy_lock, flags);
+		list_for_each_entry_safe(cvi_vb, tmp, &(vdev->rdy_queue[i]), list) {
+			vfree(cvi_vb);
+		}
+		vdev->num_rdy[i] = 0;
+		INIT_LIST_HEAD(&vdev->rdy_queue[i]);
+		spin_unlock_irqrestore(&vdev->rdy_lock, flags);
+	}
+	for (i = 0; i < VI_MAX_CHN_NUM; i++) {
+		/*
+		 * Release all the buffers enqueued to driver
+		 * when streamoff is issued
+		 */
+		spin_lock_irqsave(&vdev->qbuf_lock, flags);
+		list_for_each_entry_safe(cvi_vb, tmp, &(vdev->qbuf_list[i]), list) {
+			vb2_buf = &(cvi_vb->buf.vb2_buf);
+			if (vb2_buf->state == VB2_BUF_STATE_ERROR)
+				continue;
+			vb2_buffer_done(vb2_buf, VB2_BUF_STATE_ERROR);
+		}
+		vdev->qbuf_num[i] = 0;
+		INIT_LIST_HEAD(&vdev->qbuf_list[i]);
+		spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
+	}
+#endif
+
 	spin_lock_irqsave(&event_lock, flags);
 	while (!list_empty(&event_q.list)) {
 		ev_k = list_first_entry(&event_q.list, struct vi_event_k, list);
@@ -4297,20 +4240,20 @@ int vi_stop_streaming(struct sop_vi_dev *vdev)
 	}
 
 	for (i = 0; i < ISP_PRERAW_MAX; i++) {
-		spin_lock_irqsave(&vdev->qbuf_lock[i], flags);
+		spin_lock_irqsave(&vdev->qbuf_lock, flags);
 		vdev->qbuf_num[i] = 0;
 		INIT_LIST_HEAD(&vdev->qbuf_list[i]);
 		vdev->dqbuf_num[i] = 0;
 		INIT_LIST_HEAD(&vdev->dqbuf_list[i]);
-		spin_unlock_irqrestore(&vdev->qbuf_lock[i], flags);
+		spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 
-		spin_lock_irqsave(&dq_lock[i], flags);
+		spin_lock_irqsave(&dq_lock, flags);
 		while (!list_empty(&dqbuf_q[i].list)) {
 			n = list_first_entry(&dqbuf_q[i].list, struct _isp_dqbuf_n, list);
 			list_del_init(&n->list);
 			kfree(n);
 		}
-		spin_unlock_irqrestore(&dq_lock[i], flags);
+		spin_unlock_irqrestore(&dq_lock, flags);
 
 		for (j = 0; j < ISP_FE_CHN_MAX; j++) {
 			while ((isp_b = isp_buf_remove(&pre_fe_out_q[i][j])) != NULL)
@@ -4386,61 +4329,30 @@ int vi_stop_streaming(struct sop_vi_dev *vdev)
 	return rc;
 }
 
-static int check_pre_fe_state(struct sop_vi_dev *vdev,
-			      const enum sop_isp_raw raw_num,
-			      enum sop_isp_fe_chn_num chn_num)
-{
-	int wait_count = 10;
-	int wait_ms_per_times = 2;
-
-	while (wait_count--) {
-		if (atomic_read(&vdev->pre_fe_state[raw_num][chn_num]) != ISP_STATE_RUNNING)
-			break;
-		if (atomic_read(&vdev->isp_streamoff)) {
-			atomic_set(&vdev->pre_fe_state[raw_num][chn_num], ISP_STATE_IDLE);
-			return 0;
-		}
-		msleep(wait_ms_per_times);
-
-		vi_pr(VI_DBG, "wait fe_state cnt(%d)\n", wait_count);
-	}
-
-	if (wait_count < 0) {
-		vi_pr(VI_INFO, "wait fe_state idle timeout! need skip pre_hw_enque\n");
-		atomic_set(&vdev->pre_fe_state[raw_num][chn_num], ISP_STATE_IDLE);
-		return 0;
-	}
-
-	return 1;
-}
-
-static u64 bnr_ai_isp_launch_tpu(struct sop_vi_dev *vdev,
-				 const enum sop_isp_raw raw_num,
-				 enum sop_isp_fe_chn_num chn_num,
-				 u64 input_addr)
+static uint64_t bnr_ai_isp_lauch_tpu(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	enum cvi_isp_fe_chn_num chn_num,
+	uint64_t input_addr)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct isp_buffer *b = NULL;
-	u64 output_addr = input_addr;
-	u8 dev_num = vi_get_dev_num_by_raw(&vdev->ctx, raw_num);
+	uint64_t output_addr = input_addr;
+	uint8_t dev_num = vi_get_dev_num_by_raw(&vdev->ctx, raw_num);
 	bool is_lauch_sucess = false;
-	int timeout = 200;
+	int timeout = 80;
 	int ret = 0;
 
-	if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT)
-		b = isp_buf_last(&splt_out_q[raw_num][chn_num]);
-	else
-		b = isp_buf_last(&pre_fe_out_q[raw_num][chn_num]);
-
+	b = isp_buf_last(&pre_fe_out_q[raw_num][chn_num]);
 	if (!b) {
-		vi_pr(VI_ERR, "ai isp outbuf %d_%d is NULL!\n", raw_num, chn_num);
+		vi_pr(VI_ERR, "pre_fe_out_%d_%d is NULL!\n", raw_num, chn_num);
 		goto exit;
 	}
 
 	output_addr = b->addr;
 	b->addr = input_addr;
 
-	++ctx->isp_pipe_cfg[raw_num].raw_ai_isp_frm_cnt;
+	++ctx->isp_pipe_cfg[raw_num].bnr_ai_isp_frm_cnt;
 
 	ai_isp_cfg_info[raw_num].ai_bnr_addr_pool[0] = input_addr;
 	ai_isp_cfg_info[raw_num].ai_bnr_addr_pool[1] = output_addr;
@@ -4456,7 +4368,7 @@ static u64 bnr_ai_isp_launch_tpu(struct sop_vi_dev *vdev,
 
 	if (!ret) {
 		vi_pr(VI_WARN, "dev_%d wait process timeout(%d ms) at frame(%d)\n",
-			dev_num, timeout, ctx->isp_pipe_cfg[raw_num].raw_ai_isp_frm_cnt);
+			dev_num, timeout, ctx->isp_pipe_cfg[raw_num].bnr_ai_isp_frm_cnt);
 		goto exit;
 	}
 
@@ -4472,16 +4384,16 @@ exit:
 }
 
 static void ai_isp_handle_process(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct isp_buffer *b = NULL;
-	enum ai_isp_type_e ai_isp_type = AI_ISP_TYPE_BUTT;
-	struct isp_queue *tpu_w_q = NULL;
-	struct isp_queue *tpu_r_q = NULL;
-	enum sop_isp_fe_chn_num chn_num = ISP_FE_CH0;
-	enum sop_isp_fe_chn_num chn_max = chn_num;
+	enum ai_isp_type ai_isp_type = AI_ISP_TYPE_BUTT;
+	struct isp_queue *be_w_q = NULL;
+	struct isp_queue *be_r_q = NULL;
+	enum cvi_isp_fe_chn_num chn_num = ISP_FE_CH0;
+	enum cvi_isp_fe_chn_num chn_max = chn_num;
 
 	ai_isp_type = atomic_read(&vdev->ai_isp_type);
 	switch (ai_isp_type) {
@@ -4493,51 +4405,29 @@ static void ai_isp_handle_process(
 
 		reinit_completion(&vdev->tpu_done[raw_num]);
 		while (chn_num <= chn_max) {
-			if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT) {
-				tpu_w_q = &splt_out_q[raw_num][chn_num];
-				tpu_r_q = &pre_fe_in_q[raw_num][chn_num];
-				b = isp_buf_remove(tpu_w_q);
-				if (!b) {
-					vi_pr(VI_ERR, "tpu_w_q_%d_%d is NULL!\n", raw_num, chn_num);
-					break;
-				}
-
-				_splt_hw_enque(vdev, raw_num);
-
-				if (atomic_read(&vdev->bnr_run_tpu[raw_num]))
-					b->addr = bnr_ai_isp_launch_tpu(vdev, raw_num,
-									chn_num, b->addr);
-
-				if (check_pre_fe_state(vdev, raw_num, chn_num)) {
-					isp_buf_queue(tpu_r_q, b);
-					_pre_hw_enque(vdev, raw_num, chn_num);
-				} else {
-					isp_buf_queue(tpu_w_q, b);
-				}
-
-			} else if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_FE) {
-				tpu_w_q = &bnr_ai_isp_q[raw_num][chn_num];
-				tpu_r_q = (chn_num == ISP_FE_CH0) ? &pre_be_in_q :
-					   &pre_be_in_se_q[raw_num];
-				b = isp_buf_remove(tpu_w_q);
-				if (!b) {
-					vi_pr(VI_ERR, "tpu_w_q_%d_%d is NULL!\n", raw_num, chn_num);
-					break;
-				}
-
-				// to avoid i2c_data send delay
-				--vdev->pre_fe_frm_num[raw_num][chn_num];
-				mutex_lock(&vdev->ai_isp_lock);
-				_pre_hw_enque(vdev, raw_num, chn_num);
-				mutex_unlock(&vdev->ai_isp_lock);
-
-				if (atomic_read(&vdev->bnr_run_tpu[raw_num]))
-					b->addr = bnr_ai_isp_launch_tpu(vdev, raw_num,
-									chn_num, b->addr);
-				++vdev->pre_fe_frm_num[raw_num][chn_num];
-				isp_buf_queue(tpu_r_q, b);
+			be_w_q = &bnr_ai_isp_q[raw_num][chn_num];
+			b = isp_buf_remove(be_w_q);
+			if (!b) {
+				vi_pr(VI_ERR, "tpu_in_%d_%d is NULL!\n", raw_num, chn_num);
+				complete(&vdev->tpu_done[raw_num]);
+				return;
 			}
 
+			// to avoid i2c_data send delay
+			--vdev->pre_fe_frm_num[raw_num][chn_num];
+
+			mutex_lock(&vdev->ai_isp_lock);
+			_pre_hw_enque(vdev, raw_num, chn_num);
+			mutex_unlock(&vdev->ai_isp_lock);
+
+			if (atomic_read(&vdev->bnr_run_tpu[raw_num])) {
+				b->addr = bnr_ai_isp_lauch_tpu(vdev, raw_num, chn_num, b->addr);
+			}
+
+			++vdev->pre_fe_frm_num[raw_num][chn_num];
+
+			be_r_q = (chn_num == ISP_FE_CH0) ? &pre_be_in_q : &pre_be_in_se_q[raw_num];
+			isp_buf_queue(be_r_q, b);
 			chn_num++;
 		}
 		complete(&vdev->tpu_done[raw_num]);
@@ -4551,12 +4441,12 @@ static void ai_isp_handle_process(
 	}
 }
 
-static int ai_isp_resolve_cfg(struct sop_vi_dev *vdev, ai_isp_cfg_t cfg)
+static int ai_isp_resolve_cfg(struct cvi_vi_dev *vdev, ai_isp_cfg_t cfg)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	int timeout = 200;  //ms
 	int ret;
-	u8 raw_num = vi_get_raw_num_by_dev(ctx, cfg.vi_pipe);
+	u8 raw_num = vi_get_raw_num_by_dev(ctx, cfg.ViPipe);
 
 	switch (cfg.ai_isp_type) {
 	case AI_ISP_TYPE_BNR:
@@ -4564,18 +4454,7 @@ static int ai_isp_resolve_cfg(struct sop_vi_dev *vdev, ai_isp_cfg_t cfg)
 		switch (cfg.ai_isp_cfg_type) {
 		case AI_ISP_PIPE_LOAD:
 		{
-			int access_point = 0;
-
-			if (cfg.param_size == sizeof(access_point))
-				memcpy(&access_point, (void *)cfg.param_addr, cfg.param_size);
-
-			if (access_point == RAW_AI_ISP_SPLT && raw_num != ISP_PRERAW0) {
-				vi_pr(VI_WARN, "splt_ai_isp only support raw0!\n");
-				break;
-			}
-
-			ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap = access_point;
-
+			ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp = true;
 			break;
 		}
 		case AI_ISP_PIPE_UNLOAD:
@@ -4589,8 +4468,8 @@ static int ai_isp_resolve_cfg(struct sop_vi_dev *vdev, ai_isp_cfg_t cfg)
 				vi_pr(VI_WARN, "bnr ai isp need (be offline)&(post online)\n");
 				return -EPERM;
 			}
-			if (!ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap) {
-				vi_pr(VI_WARN, "need to enable raw_ai_isp_ap before streaming!\n");
+			if (!ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
+				vi_pr(VI_WARN, "need to enable raw_ai_isp before streaming!\n");
 				return -EPERM;
 			}
 
@@ -4609,7 +4488,7 @@ static int ai_isp_resolve_cfg(struct sop_vi_dev *vdev, ai_isp_cfg_t cfg)
 		}
 		case AI_ISP_CFG_ENABLE:
 		{
-			ctx->isp_pipe_cfg[raw_num].raw_ai_isp_frm_cnt = 0;
+			ctx->isp_pipe_cfg[raw_num].bnr_ai_isp_frm_cnt = 0;
 			atomic_set(&vdev->bnr_run_tpu[raw_num], 1);
 			break;
 		}
@@ -4642,9 +4521,10 @@ static int ai_isp_resolve_cfg(struct sop_vi_dev *vdev, ai_isp_cfg_t cfg)
 	return 0;
 }
 
-static inline void _vi_wake_up_tpu_th(struct sop_vi_dev *vdev,
-				      const enum sop_isp_raw raw_num,
-				      const enum ai_isp_type_e type)
+static inline void _vi_wake_up_tpu_th(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum ai_isp_type type)
 {
 	enum E_VI_TH tpu_th_id = vdev->tpu_thd_bind[raw_num];
 
@@ -4661,8 +4541,8 @@ static inline void _vi_wake_up_tpu_th(struct sop_vi_dev *vdev,
 
 static int _vi_run_tpu_thread1(void *arg)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)arg;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)arg;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	enum E_VI_TH th_id = E_VI_TH_RUN_TPU1;
 
 	while (1) {
@@ -4688,8 +4568,8 @@ static int _vi_run_tpu_thread1(void *arg)
 
 static int _vi_run_tpu_thread2(void *arg)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)arg;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)arg;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	enum E_VI_TH th_id = E_VI_TH_RUN_TPU2;
 
 	while (1) {
@@ -4713,15 +4593,39 @@ static int _vi_run_tpu_thread2(void *arg)
 	return 0;
 }
 
-static int _pre_be_outbuf_enque(struct sop_vi_dev *vdev,
-				const enum sop_isp_raw raw_num,
-				const u8 hw_chn_num)
+static void vi_dq_vb_buffer(struct cvi_vi_dev *videv, const u8 chn_id)
+{
+	struct cvi_isp_buf *cvi_vb, *tmp;
+	struct vb2_buffer *vb2_buf;
+	unsigned long flags;
+
+	spin_lock_irqsave(&videv->qbuf_lock, flags);
+	list_for_each_entry_safe(cvi_vb, tmp, &(videv->qbuf_list[chn_id]), list) {
+		vb2_buf = &(cvi_vb->buf.vb2_buf);
+		if (vb2_buf->state == VB2_BUF_STATE_ERROR)
+			continue;
+		vb2_buffer_done(vb2_buf, VB2_BUF_STATE_ERROR);
+	}
+
+	list_for_each_entry_safe(cvi_vb, tmp, &(videv->dqbuf_list[chn_id]), list) {
+		vb2_buf = &(cvi_vb->buf.vb2_buf);
+		if (vb2_buf->state == VB2_BUF_STATE_ERROR)
+			continue;
+		vb2_buffer_done(vb2_buf, VB2_BUF_STATE_ERROR);
+	}
+	spin_unlock_irqrestore(&videv->qbuf_lock, flags);
+}
+
+static int _pre_be_outbuf_enque(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const u8 hw_chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 
 	if (!ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB sensor
 		struct isp_queue *be_out_q = &pre_be_out_q[hw_chn_num];
-		enum isp_blk_id_t pre_be_dma = (hw_chn_num == ISP_BE_CH0) ?
+		enum ISP_BLK_ID_T pre_be_dma = (hw_chn_num == ISP_BE_CH0) ?
 						ISP_BLK_ID_DMA_CTL_PRE_RAW_BE_LE :
 						ISP_BLK_ID_DMA_CTL_PRE_RAW_BE_SE;
 		struct isp_buffer *b = NULL;
@@ -4746,7 +4650,7 @@ static int _pre_be_outbuf_enque(struct sop_vi_dev *vdev,
 		}
 	} else if (ctx->is_multi_sensor &&
 		   ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB+YUV sensor
-		enum isp_blk_id_t pre_fe_dma;
+		enum ISP_BLK_ID_T pre_fe_dma;
 		struct isp_queue *fe_out_q = &pre_fe_out_q[raw_num][hw_chn_num];
 		struct isp_buffer *b = NULL;
 
@@ -4767,63 +4671,19 @@ static int _pre_be_outbuf_enque(struct sop_vi_dev *vdev,
 	return 1;
 }
 
-static int _pre_fe_inbuf_enque(struct sop_vi_dev *vdev,
-			       const enum sop_isp_raw raw_num,
-			       const enum sop_isp_fe_chn_num chn_num)
-{
-	struct isp_ctx *ctx = &vdev->ctx;
-	struct isp_queue *splt_r_q = NULL;
-	struct isp_buffer *b = NULL;
-	u64 splt_rdma_addr = 0;
-	u32 splt_fe0_r = (chn_num == ISP_FE_CH0) ?
-				ISP_BLK_ID_DMA_CTL_SPLT_FE0_RDMA_LE :
-				ISP_BLK_ID_DMA_CTL_SPLT_FE0_RDMA_SE;
-	u32 splt_fe1_r = (chn_num == ISP_FE_CH0) ?
-				ISP_BLK_ID_DMA_CTL_SPLT_FE1_RDMA_LE :
-				ISP_BLK_ID_DMA_CTL_SPLT_FE1_RDMA_SE;
-
-	if (_is_right_tile(ctx, raw_num)) {
-		splt_rdma_addr = ispblk_dma_getaddr(ctx, splt_fe0_r);
-		splt_r_q = &pre_fe_in_q[ISP_PRERAW0][chn_num];
-		b = isp_buf_next(splt_r_q);
-		if (!b) {
-			vi_pr(VI_INFO, "pre_fe_%d chn_num_%d inbuf is empty\n", raw_num, chn_num);
-			return 0;
-		}
-
-		if (splt_rdma_addr != b->addr) {
-			vi_pr(VI_INFO, "pre_fe0/fe1 addr mismatch buffer=0x%llx, b->addr=0x%llx\n",
-			      splt_rdma_addr, b->addr);
-			return 0;
-		}
-
-		ispblk_dma_setaddr(ctx, splt_fe1_r, b->addr + (ctx->tile_cfg.r_in.start * 3) / 2);
-	} else {
-		splt_r_q = &pre_fe_in_q[raw_num][chn_num];
-		b = isp_buf_next(splt_r_q);
-		if (!b) {
-			vi_pr(VI_INFO, "pre_fe_%d chn_num_%d inbuf is empty\n", raw_num, chn_num);
-			return 0;
-		}
-
-		ispblk_dma_setaddr(ctx, splt_fe0_r, b->addr);
-	}
-
-	return 1;
-}
-
-static int _pre_fe_outbuf_enque(struct sop_vi_dev *vdev,
-				const enum sop_isp_raw raw_num,
-				const enum sop_isp_fe_chn_num chn_num)
+static int _pre_fe_outbuf_enque(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 
 	if (!ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB sensor
 		struct isp_queue *fe_out_q = &pre_fe_out_q[raw_num][chn_num];
-		enum isp_blk_id_t pre_fe_dma;
+		enum ISP_BLK_ID_T pre_fe_dma;
 		struct isp_buffer *b = NULL;
 		bool trigger = false;
-		u32 dmaid_le, dmaid_se;
+		uint32_t dmaid_le, dmaid_se;
 
 		dmaid_le = csibdg_dma_find_hwid(raw_num, ISP_FE_CH0);
 		dmaid_se = csibdg_dma_find_hwid(raw_num, ISP_FE_CH1);
@@ -4836,31 +4696,8 @@ static int _pre_fe_outbuf_enque(struct sop_vi_dev *vdev,
 				trigger = true;
 			}
 
-			if (!trigger)
-				return 1;
-
-			if (_is_right_tile(ctx, raw_num)) {
-				u64 buffaddr = ispblk_dma_getaddr(ctx, csibdg_dma_find_hwid(ISP_PRERAW0, chn_num));
-				fe_out_q = &raw_dump_b_q[ISP_PRERAW0];
-
-				b = isp_buf_next(fe_out_q);
-				if (b == NULL) {
-					vi_pr(VI_ERR, "Pre_fe_%d LE raw_dump outbuf is empty\n", raw_num);
-					return 0;
-				}
-
-				if (buffaddr != b->addr) {
-					vi_pr(VI_DBG, "pre_fe0/fe1 addr mismatch buffer=0x%llx, b->addr=0x%llx\n",
-						buffaddr, b->addr);
-					return 0;
-				}
-
-				pre_fe_dma = (chn_num == ISP_FE_CH0) ? dmaid_le : dmaid_se;
-
-				ispblk_dma_setaddr(ctx, pre_fe_dma,
-					buffaddr + 3 * UPPER(ctx->isp_pipe_cfg[ISP_PRERAW0].csibdg_width, 1));
-			} else {
-				fe_out_q = &raw_dump_b_q[raw_num];
+			if (trigger) {
+				struct isp_queue *fe_out_q = &raw_dump_b_q[raw_num];
 
 				vi_pr(VI_DBG, "pre_fe raw_dump cfg start\n");
 
@@ -4884,9 +4721,9 @@ static int _pre_fe_outbuf_enque(struct sop_vi_dev *vdev,
 
 					ispblk_dma_setaddr(ctx, dmaid_se, b_se->addr);
 				}
-			}
 
-			atomic_set(&vdev->isp_raw_dump_en[raw_num], 2);
+				atomic_set(&vdev->isp_raw_dump_en[raw_num], 2);
+			}
 		} else {
 			//TODO maybe we can combine code, reduce code;
 			if (_is_right_tile(ctx, raw_num)) { //raw_num = ISP_PRERAW1
@@ -4924,7 +4761,7 @@ static int _pre_fe_outbuf_enque(struct sop_vi_dev *vdev,
 		}
 	} else if (ctx->is_multi_sensor &&
 		   ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB+YUV sensor
-		enum isp_blk_id_t dmaid;
+		enum ISP_BLK_ID_T dmaid;
 		struct isp_queue *fe_out_q = &pre_fe_out_q[raw_num][chn_num];
 		struct isp_buffer *b = NULL;
 
@@ -4945,9 +4782,10 @@ static int _pre_fe_outbuf_enque(struct sop_vi_dev *vdev,
 	return 1;
 }
 
-static int _postraw_inbuf_enq_check(struct sop_vi_dev *vdev,
-				    enum sop_isp_raw *raw_num,
-				    enum sop_isp_fe_chn_num *chn_num)
+static int _postraw_inbuf_enq_check(
+	struct cvi_vi_dev *vdev,
+	enum cvi_isp_raw *raw_num,
+	enum cvi_isp_fe_chn_num *chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct isp_queue *in_q = NULL, *in_se_q = NULL;
@@ -4983,11 +4821,11 @@ static int _postraw_inbuf_enq_check(struct sop_vi_dev *vdev,
 
 	//YUV sensor, offline return error, online than config rawtop read dma.
 	if (ctx->isp_pipe_cfg[b->raw_num].is_yuv_sensor) {
-		if (ctx->isp_pipe_cfg[b->raw_num].is_offline_scaler)
+		if (ctx->isp_pipe_cfg[b->raw_num].is_offline_scaler) {
 			ret = 1;
-		else
-			ispblk_dma_yuv_bypass_config(ctx, ISP_BLK_ID_DMA_CTL_RAW_RDMA0,
-						     b->addr, b->raw_num);
+		} else {
+			ispblk_dma_yuv_bypass_config(ctx, ISP_BLK_ID_DMA_CTL_RAW_RDMA0, b->addr, b->raw_num);
+		}
 
 		return ret;
 	}
@@ -5016,7 +4854,6 @@ static int _postraw_inbuf_enq_check(struct sop_vi_dev *vdev,
 
 	vdev->ctx.isp_pipe_cfg[b->raw_num].lmap_i.w_bit = b->lmap_i.w_bit;
 	vdev->ctx.isp_pipe_cfg[b->raw_num].lmap_i.h_bit = b->lmap_i.h_bit;
-	vdev->ctx.isp_pipe_cfg[b->raw_num].ts = b->timestamp;
 
 	if (_is_fe_be_online(ctx)) { //fe->be->dram->post
 		ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_RAW_RDMA0, b->addr);
@@ -5063,36 +4900,35 @@ static int _postraw_inbuf_enq_check(struct sop_vi_dev *vdev,
 	return ret;
 }
 
-static void _postraw_outbuf_enque(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static void _postraw_outbuf_enque(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct vb2_buffer *vb2_buf;
-	struct sop_isp_buf *b = NULL;
+	struct cvi_isp_buf *b = NULL;
 	struct isp_ctx *ctx = &vdev->ctx;
-	u64 dma_offset = 0;
-	u64 dma_addr[2];
-	u8 chn_id = vi_get_dev_num_by_raw(ctx, raw_num);
+	uint64_t dma_offset = 0;
+	uint64_t dma_addr[2];
 
 	if (!atomic_read(&vdev->is_streaming[raw_num]))
 		return;
 
 	//Get the buffer for postraw output buffer
-	b = sop_isp_rdy_buf_next(vdev, raw_num);
+	b = cvi_isp_rdy_buf_next(vdev, raw_num);
 	if (b == NULL)
 		return;
 
 	vb2_buf = &b->buf.vb2_buf;
 
-	switch (vdev->fmt[chn_id]->buffers) {
+	switch (vdev->fmt[raw_num]->buffers) {
 	case 1:
 		dma_addr[0] = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
-		dma_addr[1] = dma_addr[0] + vdev->pipe[chn_id].sizeimage[0];
+		dma_addr[1] = dma_addr[0] + vdev->pipe[raw_num].sizeimage[0];
 		break;
 	case 2:
 		dma_addr[0] = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
 		dma_addr[1] = vb2_dma_contig_plane_dma_addr(vb2_buf, 1);
 		break;
 	default:
-		vi_pr(VI_WARN, "unsupport planes:%d\n", vdev->fmt[chn_id]->buffers);
+		vi_pr(VI_WARN, "unsupport planes:%d\n", vdev->fmt[raw_num]->buffers);
 		break;
 	}
 
@@ -5118,11 +4954,11 @@ static void _postraw_outbuf_enque(struct sop_vi_dev *vdev, const enum sop_isp_ra
 	}
 }
 
-static u8 _postraw_outbuf_empty(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static u8 _postraw_outbuf_empty(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	u8 ret = 0;
 
-	if (sop_isp_rdy_buf_empty(vdev, raw_num)) {
+	if (cvi_isp_rdy_buf_empty(vdev, raw_num)) {
 		vi_pr(VI_DBG, "postraw chn_%d output buffer is empty\n", raw_num);
 		ret = 1;
 	}
@@ -5130,10 +4966,10 @@ static u8 _postraw_outbuf_empty(struct sop_vi_dev *vdev, const enum sop_isp_raw 
 	return ret;
 }
 
-void _postraw_outbuf_enq(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+void _postraw_outbuf_enq(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	if (!(vdev->ctx.isp_pipe_cfg[raw_num].is_tile && vdev->ctx.is_work_on_r_tile))
-		sop_isp_rdy_buf_pop(vdev, raw_num);
+		cvi_isp_rdy_buf_pop(vdev, raw_num);
 	_postraw_outbuf_enque(vdev, raw_num);
 }
 
@@ -5142,33 +4978,17 @@ void _postraw_outbuf_enq(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num
  *  trig preraw if there is output buffer in preraw output.
  */
 s8 _pre_hw_enque(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
-	const enum sop_isp_fe_chn_num chn_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum isp_blk_id_t splt_rdma_id;
 
 	//ISP frame error handling
 	if (atomic_read(&vdev->isp_err_handle_flag) == 1) {
 		vi_pr(VI_DBG, "wait err_handling done\n");
 		return -ISP_ERROR;
 	}
-
-	if (ddr_need_retrain(vdev)) {
-		ctx->isp_pipe_cfg[raw_num].is_drop_next_frame = true;
-		trig_8051_if_pre_idle(vdev);
-		return -ISP_DROP_FRM;
-	}
-
-#ifdef PORTING_TEST //test only
-	if (!ctx->isp_pipe_cfg[ISP_PRERAW0].is_raw_replay_fe &&
-	    !ctx->isp_pipe_cfg[ISP_PRERAW0].is_raw_replay_be &&
-	    stop_stream_en) {
-		vi_pr(VI_WARN, "stop_stream_en\n");
-		return -ISP_STOP;
-	}
-#endif
 
 	if (atomic_read(&vdev->isp_streamoff) == 0) {
 		if (_is_drop_next_frame(vdev, raw_num, chn_num)) {
@@ -5222,7 +5042,6 @@ s8 _pre_hw_enque(
 
 				if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) { //Scaler onffline mode
 					if (_postraw_outbuf_empty(vdev, raw_num)) {
-						atomic_set(&vdev->out_buf_empty[raw_num], 1);
 						atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
 						return -ISP_NO_BUFFER;
 					}
@@ -5234,35 +5053,6 @@ s8 _pre_hw_enque(
 					_isp_fe_be_raw_dump_cfg(vdev, raw_num, chn_num);
 
 				isp_pre_trig(ctx, raw_num, chn_num);
-			} else if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT) {
-				if (atomic_cmpxchg(&vdev->pre_fe_state[raw_num][chn_num],
-						   ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
-						   ISP_STATE_RUNNING) {
-					vi_pr(VI_INFO, "Pre_fe_%d chn_num_%d is running\n",
-					      raw_num, chn_num);
-					return -ISP_RUNNING;
-				}
-
-				if (_is_right_tile(ctx, raw_num)) {
-					splt_rdma_id = (chn_num == ISP_FE_CH0) ?
-							ISP_BLK_ID_SPLT_FE1_RDMA_LE :
-							ISP_BLK_ID_SPLT_FE1_RDMA_SE;
-				} else {
-					splt_rdma_id = (chn_num == ISP_FE_CH0) ?
-							ISP_BLK_ID_SPLT_FE0_RDMA_LE :
-							ISP_BLK_ID_SPLT_FE0_RDMA_SE;
-				}
-
-				if (_pre_fe_inbuf_enque(vdev, raw_num, chn_num) &&
-				    _pre_fe_outbuf_enque(vdev, raw_num, chn_num)) {
-					ispblk_splt_rdma_ctrl_config(ctx, splt_rdma_id, true);
-					isp_pre_trig(ctx, raw_num, chn_num);
-				} else {
-					// ispblk_splt_rdma_ctrl_config(ctx, splt_rdma_id, false);
-					atomic_set(&vdev->pre_fe_state[raw_num][chn_num],
-						   ISP_STATE_IDLE);
-					return -ISP_NO_BUFFER;
-				}
 			} else {
 				if (atomic_cmpxchg(&vdev->pre_fe_state[raw_num][chn_num],
 							ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
@@ -5279,132 +5069,54 @@ s8 _pre_hw_enque(
 					return -ISP_NO_BUFFER;
 				}
 			}
-		} else if (_is_all_online(ctx)) {
-			if (atomic_cmpxchg(&vdev->postraw_state,
-						ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
-						ISP_STATE_RUNNING) {
-				vi_pr(VI_DBG, "Postraw is running\n");
-				return -ISP_RUNNING;
-			}
-
-			if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) { //Scaler onffline mode
-				if (_postraw_outbuf_empty(vdev, raw_num)) {
-					atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
-					return -ISP_NO_BUFFER;
-				}
-
-				_postraw_outbuf_enq(vdev, raw_num);
-			}
-
-			if (atomic_read(&vdev->isp_raw_dump_en[raw_num]) == 1) //raw_dump flow
-				_isp_fe_be_raw_dump_cfg(vdev, raw_num, chn_num);
-
-			isp_pre_trig(ctx, raw_num, chn_num);
-		} else if (_is_fe_be_online(ctx) && ctx->is_slice_buf_on) { //fe->be->dram->post
-			if (!ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB sensor
-				if (atomic_cmpxchg(&vdev->pre_fe_state[raw_num][chn_num],
-							ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
-							ISP_STATE_RUNNING) {
-					vi_pr(VI_DBG, "Pre_fe chn_num_%d is running\n", chn_num);
-					return -ISP_RUNNING;
-				}
-			} else { //YUV sensor
-				if (atomic_cmpxchg(&vdev->pre_fe_state[raw_num][chn_num],
-							ISP_STATE_IDLE, ISP_STATE_RUNNING) ==
-							ISP_STATE_RUNNING) {
-					vi_pr(VI_DBG, "Pre_fe_%d chn_num_%d is running\n", raw_num, chn_num);
-					return -ISP_RUNNING;
-				}
-			}
-
-			if (atomic_read(&vdev->isp_raw_dump_en[raw_num]) == 1) //raw_dump flow
-				_isp_fe_be_raw_dump_cfg(vdev, raw_num, chn_num);
-			isp_pre_trig(ctx, raw_num, chn_num);
 		}
 	}
 	return ISP_SUCCESS;
 }
 
-static inline void _swap_post_sts_buf(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+static inline void _swap_post_sts_buf(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
 	struct _membuf *pool;
 	unsigned long flags;
-	u8 idx;
-	u64 gms_phyaddr, ae_le_phyaddr, ae_se_phyaddr, dci_phyaddr;
+	uint8_t idx;
 
 	pool = &isp_bufpool[raw_num];
 
-	//right tile don't swap idx
-	if (!(ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile)) {
-		spin_lock_irqsave(&pool->post_sts_lock, flags);
-		if (pool->post_sts_in_use == 1) {
-			spin_unlock_irqrestore(&pool->post_sts_lock, flags);
-			vi_pr(VI_DBG, "post sts is in use\n");
-			return;
-		}
-		pool->post_sts_busy_idx ^= 1;
+	spin_lock_irqsave(&pool->post_sts_lock, flags);
+	if (pool->post_sts_in_use == 1) {
 		spin_unlock_irqrestore(&pool->post_sts_lock, flags);
+		return;
 	}
+	pool->post_sts_busy_idx ^= 1;
+	spin_unlock_irqrestore(&pool->post_sts_lock, flags);
 
 	if (_is_be_post_online(ctx))
 		idx = pool->post_sts_busy_idx ^ 1;
 	else
 		idx = pool->post_sts_busy_idx;
 
-	gms_phyaddr = pool->sts_mem[idx].gms.phy_addr;
-	ae_le_phyaddr = pool->sts_mem[idx].ae_le.phy_addr;
-	ae_se_phyaddr = pool->sts_mem[idx].ae_se.phy_addr;
-	dci_phyaddr = pool->sts_mem[idx].dci.phy_addr;
-
-	if (ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile) {
-		gms_phyaddr += VI_ALIGN(GMS_SEC_SIZE);
-		ae_le_phyaddr += VI_ALIGN(AE_DMA_SIZE);
-		ae_se_phyaddr += VI_ALIGN(AE_DMA_SIZE);
-		dci_phyaddr += VI_ALIGN(DCI_DMA_SIZE);
-	}
-
-	vi_pr(VI_DBG, "raw_%d, idx_%d ae_le_addr(%llx), ae_se_addr(%llx), gms_addr(0x%llx), dci_addr(0x%llx)\n",
-		raw_num, idx, ae_le_phyaddr, ae_se_phyaddr, gms_phyaddr, dci_phyaddr);
-
 	//gms dma
-	ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_GMS, gms_phyaddr);
+	ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_GMS, pool->sts_mem[idx].gms.phy_addr);
 
 	//ae le dma
-	ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_LE, ae_le_phyaddr);
+	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_AE_HIST_LE, pool->sts_mem[idx].ae_le.phy_addr);
 	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
 		//ae se dma
-		ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_AE_HIST_SE, ae_se_phyaddr);
+		ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_AE_HIST_SE, pool->sts_mem[idx].ae_se.phy_addr);
 	}
 
 	//dci dma is fixed size
-	ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_DCI, dci_phyaddr);
+	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_DCI, pool->sts_mem[idx].dci.phy_addr);
 	//hist edge v dma is fixed size
 	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_HIST_EDGE_V, pool->sts_mem[idx].hist_edge_v.phy_addr);
 }
 
-static inline void _post_rgbmap_update(struct isp_ctx *ctx, const enum sop_isp_raw raw_num, const u32 frm_num)
+static inline void _post_rgbmap_update(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num, const u32 frm_num)
 {
-	u64 cur_le_r, cur_se_r, pre_le_r, pre_se_r;
-	u16 w_bit = ctx->isp_pipe_cfg[raw_num].rgbmap_i.w_bit;
-	u8 cur_idx = (frm_num - ctx->rgbmap_prebuf_idx) % RGBMAP_BUF_IDX;
-	u8 pre_idx = (frm_num - 1 + RGBMAP_BUF_IDX - ctx->rgbmap_prebuf_idx) % RGBMAP_BUF_IDX;
-
-	switch (ctx->isp_pipe_cfg[raw_num].rgbmap_chg_state) {
-	case ISP_RGBMAP_CHG_T0:
-		cur_idx = pre_idx;
-		ctx->isp_pipe_cfg[raw_num].rgbmap_chg_state = ISP_RGBMAP_CHG_T1;
-		break;
-	case ISP_RGBMAP_CHG_T1:
-		cur_idx = pre_idx;
-		ctx->isp_pipe_cfg[raw_num].rgbmap_chg_state = ISP_RGBMAP_CHG_T2;
-		break;
-	case ISP_RGBMAP_CHG_T2:
-		cur_idx = pre_idx;
-		ctx->isp_pipe_cfg[raw_num].rgbmap_chg_state = ISP_RGBMAP_CHG_IDLE;
-		break;
-	default:
-		break;
-	}
+	uint64_t cur_le_r, cur_se_r, pre_le_r, pre_se_r;
+	uint16_t w_bit = ctx->isp_pipe_cfg[raw_num].rgbmap_i.w_bit;
+	uint8_t cur_idx = (frm_num - ctx->rgbmap_prebuf_idx) % RGBMAP_BUF_IDX;
+	uint8_t pre_idx = (frm_num - 1 + RGBMAP_BUF_IDX - ctx->rgbmap_prebuf_idx) % RGBMAP_BUF_IDX;
 
 	cur_le_r = isp_bufpool[raw_num].rgbmap_le[cur_idx];
 	if (frm_num <= ctx->rgbmap_prebuf_idx)
@@ -5444,15 +5156,10 @@ static inline void _post_rgbmap_update(struct isp_ctx *ctx, const enum sop_isp_r
 	}
 }
 
-static inline void _post_lmap_update(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+static inline void _post_lmap_update(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
-	u64 lmap_le = isp_bufpool[raw_num].lmap_le;
-	u64 lmap_se = isp_bufpool[raw_num].lmap_se;
-
-	if (ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile) {
-		lmap_le = isp_bufpool[raw_num + 1].lmap_le;
-		lmap_se = isp_bufpool[raw_num + 1].lmap_se;
-	}
+	uint64_t lmap_le = isp_bufpool[raw_num].lmap_le;
+	uint64_t lmap_se = isp_bufpool[raw_num].lmap_se;
 
 	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_LMAP_LE, lmap_le);
 	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_LTM_LE, lmap_le);
@@ -5466,9 +5173,9 @@ static inline void _post_lmap_update(struct isp_ctx *ctx, const enum sop_isp_raw
 	}
 }
 
-static inline void _post_mlsc_update(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+static inline void _post_mlsc_update(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
-	u64 lsc = isp_bufpool[raw_num].lsc;
+	uint64_t lsc = isp_bufpool[raw_num].lsc;
 
 	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_LSC_LE, lsc);
 
@@ -5476,10 +5183,10 @@ static inline void _post_mlsc_update(struct isp_ctx *ctx, const enum sop_isp_raw
 		ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_LSC_SE, lsc);
 }
 
-static inline void _post_ldci_update(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+static inline void _post_ldci_update(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
-	u64 ldci_wdma = isp_bufpool[raw_num].ldci;
-	u64 ldci_rdma = isp_bufpool[raw_num].ldci;
+	uint64_t ldci_wdma = isp_bufpool[raw_num].ldci;
+	uint64_t ldci_rdma = isp_bufpool[raw_num].ldci;
 
 	if (ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile) {
 		ldci_wdma = isp_bufpool[raw_num + 1].ldci;
@@ -5490,13 +5197,13 @@ static inline void _post_ldci_update(struct isp_ctx *ctx, const enum sop_isp_raw
 	ispblk_dma_setaddr(ctx, ISP_BLK_ID_DMA_CTL_LDCI_R, ldci_rdma);
 }
 
-static inline void _post_3dnr_update(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+static inline void _post_3dnr_update(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
-	u64 manr_addr = isp_bufpool[raw_num].manr[0];
-	u64 ai_isp_y_addr, ai_isp_u_addr, ai_isp_v_addr, ai_isp_manr_addr;
-	u64 r_mo_addr, r_y_addr, r_uv_addr;
-	u64 w_mo_addr, w_y_addr, w_uv_addr;
-	u32 size;
+	uint64_t manr_addr = isp_bufpool[raw_num].manr[0];
+	uint64_t ai_isp_y_addr, ai_isp_u_addr, ai_isp_v_addr, ai_isp_manr_addr;
+	uint64_t r_mo_addr, r_y_addr, r_uv_addr;
+	uint64_t w_mo_addr, w_y_addr, w_uv_addr;
+	uint32_t size;
 	void *pSrc = NULL, *pDst = NULL;
 
 	r_mo_addr = w_mo_addr = isp_bufpool[raw_num].tdnr[0];
@@ -5546,7 +5253,8 @@ static inline void _post_3dnr_update(struct isp_ctx *ctx, const enum sop_isp_raw
 		//ai_isp
 		if (ctx->isp_pipe_cfg[raw_num].is_tnr_ai_isp &&
 		    ctx->isp_pipe_cfg[raw_num].is_tnr_ai_isp_rdy) {
-
+			// TODO, This is for test.
+			// Normally, should use the dma address returned by TPU.
 			ai_isp_y_addr    = isp_bufpool[raw_num].tnr_ai_isp[0];
 			ai_isp_u_addr    = isp_bufpool[raw_num].tnr_ai_isp[1];
 			ai_isp_v_addr    = isp_bufpool[raw_num].tnr_ai_isp[2];
@@ -5580,7 +5288,7 @@ static inline void _post_3dnr_update(struct isp_ctx *ctx, const enum sop_isp_raw
 	}
 }
 
-static inline void _post_yuv_crop_update(struct isp_ctx *ctx, const enum sop_isp_raw raw_num)
+static inline void _post_yuv_crop_update(struct isp_ctx *ctx, const enum cvi_isp_raw raw_num)
 {
 	if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
 		if (ctx->isp_pipe_cfg[raw_num].is_tnr_ai_isp &&
@@ -5601,102 +5309,101 @@ static inline void _post_yuv_crop_update(struct isp_ctx *ctx, const enum sop_isp
 			crop.h >>= 1;
 			ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_C, crop);
 		} else {
-			ispblk_crop_enable(ctx, ISP_BLK_ID_YUV_CROP_Y, false);
-			ispblk_crop_enable(ctx, ISP_BLK_ID_YUV_CROP_C, false);
-		}
-
-		if (ctx->isp_pipe_cfg[raw_num].is_tile) {
-			struct vi_rect crop = {0};
-
-			if (!ctx->is_work_on_r_tile) { //left tile
-				crop.w = ctx->tile_cfg.l_out.end - ctx->tile_cfg.l_out.start + 1;
-				crop.h = ctx->img_height;
-
-				if (ctx->isp_pipe_cfg[raw_num].is_postout_crop) {
-					if (ctx->isp_pipe_cfg[raw_num].postout_crop.x >= ctx->tile_cfg.r_out.start) {
-						//it's means left tile dma disable
-						ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_Y, true, true);
-						ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_C, true, true);
-					} else {
-						crop.x = ctx->isp_pipe_cfg[raw_num].postout_crop.x;
-						crop.y = ctx->isp_pipe_cfg[raw_num].postout_crop.y;
-						crop.w = (crop.x + ctx->isp_pipe_cfg[raw_num].postout_crop.w
-								> ctx->tile_cfg.r_out.start)
-								? ctx->tile_cfg.r_out.start - crop.x
-								: ctx->isp_pipe_cfg[raw_num].postout_crop.w;
-						crop.h = ctx->isp_pipe_cfg[raw_num].postout_crop.h;
-					}
-				}
-
-				vi_pr(VI_DBG, "left tile y crop x=%d y=%d w=%d h=%d",
-					crop.x, crop.y, crop.w, crop.h);
-				ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_Y, crop);
-				crop.x >>= 1;
-				crop.w >>= 1;
-				if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {//offline2sc
-					crop.y >>= 1;
-					crop.h >>= 1;
-				}
-				ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_C, crop);
-
-				vi_pr(VI_DBG, "left tile uv crop x=%d y=%d w=%d h=%d",
-					crop.x, crop.y, crop.w, crop.h);
-			} else { //right tile
-				crop.h = ctx->img_height;
-				if (!ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
-					crop.x = 0;
-					crop.w = ctx->img_width;
-				} else { //offline2sc
-					crop.x = ctx->tile_cfg.r_out.start - ctx->tile_cfg.r_in.start;
-					crop.w = ctx->tile_cfg.r_out.end - ctx->tile_cfg.r_out.start + 1;
-				}
-
-				if (ctx->isp_pipe_cfg[raw_num].is_postout_crop) {
-					if (ctx->isp_pipe_cfg[raw_num].postout_crop.x +
-						ctx->isp_pipe_cfg[raw_num].postout_crop.w <= ctx->tile_cfg.r_out.start) {
-						//it's means right tile dma disable
-						ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_Y, true, true);
-						ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_C, true, true);
-					} else {
-						crop.x = (ctx->isp_pipe_cfg[raw_num].postout_crop.x < ctx->tile_cfg.r_out.start)
-							? crop.x
-							: (crop.x + ctx->isp_pipe_cfg[raw_num].postout_crop.x
-							- ctx->tile_cfg.r_out.start);
-						crop.y = ctx->isp_pipe_cfg[raw_num].postout_crop.y;
-						crop.w = (ctx->isp_pipe_cfg[raw_num].postout_crop.x < ctx->tile_cfg.r_out.start)
-							? (ctx->isp_pipe_cfg[raw_num].postout_crop.x
-							+ ctx->isp_pipe_cfg[raw_num].postout_crop.w
-							- ctx->tile_cfg.r_out.start)
-							: ctx->isp_pipe_cfg[raw_num].postout_crop.w;
-						crop.h = ctx->isp_pipe_cfg[raw_num].postout_crop.h;
-					}
-				}
-
-				vi_pr(VI_DBG, "right tile y crop x=%d y=%d w=%d h=%d",
-					crop.x, crop.y, crop.w, crop.h);
-				ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_Y, crop);
-				crop.x >>= 1;
-				crop.w >>= 1;
-				if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {//offline2sc
-					crop.y >>= 1;
-					crop.h >>= 1;
-				}
-				ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_C, crop);
-
-				vi_pr(VI_DBG, "right tile uv crop x=%d y=%d w=%d h=%d",
-					crop.x, crop.y, crop.w, crop.h);
-			}
+			ispblk_crop_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_Y, false);
+			ispblk_crop_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_C, false);
 		}
 	} else {
 		ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_Y, false, false);
 		ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_C, false, false);
 	}
+
+	if (ctx->isp_pipe_cfg[raw_num].is_tile) {
+		struct vi_rect crop = {0};
+
+		if (!ctx->is_work_on_r_tile) { //left tile
+			crop.w = ctx->tile_cfg.l_out.end - ctx->tile_cfg.l_out.start + 1;
+			crop.h = ctx->img_height;
+
+			if (ctx->isp_pipe_cfg[raw_num].is_postout_crop) {
+				if (ctx->isp_pipe_cfg[raw_num].postout_crop.x >= ctx->tile_cfg.r_out.start) {
+					//it's means left tile dma disable
+					ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_Y, true, true);
+					ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_C, true, true);
+				} else {
+					crop.x = ctx->isp_pipe_cfg[raw_num].postout_crop.x;
+					crop.y = ctx->isp_pipe_cfg[raw_num].postout_crop.y;
+					crop.w = (crop.x + ctx->isp_pipe_cfg[raw_num].postout_crop.w
+							> ctx->tile_cfg.r_out.start)
+							? ctx->tile_cfg.r_out.start - crop.x
+							: ctx->isp_pipe_cfg[raw_num].postout_crop.w;
+					crop.h = ctx->isp_pipe_cfg[raw_num].postout_crop.h;
+				}
+			}
+
+			vi_pr(VI_DBG, "left tile y crop x=%d y=%d w=%d h=%d",
+				crop.x, crop.y, crop.w, crop.h);
+			ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_Y, crop);
+			crop.x >>= 1;
+			crop.w >>= 1;
+			if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {//offline2sc
+				crop.y >>= 1;
+				crop.h >>= 1;
+			}
+			ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_C, crop);
+
+			vi_pr(VI_DBG, "left tile uv crop x=%d y=%d w=%d h=%d",
+				crop.x, crop.y, crop.w, crop.h);
+		} else { //right tile
+			crop.h = ctx->img_height;
+			if (!ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
+				crop.x = 0;
+				crop.w = ctx->img_width;
+			} else { //offline2sc
+				crop.x = ctx->tile_cfg.r_out.start - ctx->tile_cfg.r_in.start;
+				crop.w = ctx->tile_cfg.r_out.end - ctx->tile_cfg.r_out.start + 1;
+			}
+
+			if (ctx->isp_pipe_cfg[raw_num].is_postout_crop) {
+				if (ctx->isp_pipe_cfg[raw_num].postout_crop.x +
+					ctx->isp_pipe_cfg[raw_num].postout_crop.w <= ctx->tile_cfg.r_out.start) {
+					//it's means right tile dma disable
+					ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_Y, true, true);
+					ispblk_dma_enable(ctx, ISP_BLK_ID_DMA_CTL_YUV_CROP_C, true, true);
+				} else {
+					crop.x = (ctx->isp_pipe_cfg[raw_num].postout_crop.x < ctx->tile_cfg.r_out.start)
+						? crop.x
+						: (crop.x + ctx->isp_pipe_cfg[raw_num].postout_crop.x
+						   - ctx->tile_cfg.r_out.start);
+					crop.y = ctx->isp_pipe_cfg[raw_num].postout_crop.y;
+					crop.w = (ctx->isp_pipe_cfg[raw_num].postout_crop.x < ctx->tile_cfg.r_out.start)
+						? (ctx->isp_pipe_cfg[raw_num].postout_crop.x
+						  + ctx->isp_pipe_cfg[raw_num].postout_crop.w
+						  - ctx->tile_cfg.r_out.start)
+						: ctx->isp_pipe_cfg[raw_num].postout_crop.w;
+					crop.h = ctx->isp_pipe_cfg[raw_num].postout_crop.h;
+				}
+			}
+
+			vi_pr(VI_DBG, "right tile y crop x=%d y=%d w=%d h=%d",
+				crop.x, crop.y, crop.w, crop.h);
+			ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_Y, crop);
+			crop.x >>= 1;
+			crop.w >>= 1;
+			if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {//offline2sc
+				crop.y >>= 1;
+				crop.h >>= 1;
+			}
+			ispblk_crop_config(ctx, ISP_BLK_ID_YUV_CROP_C, crop);
+
+			vi_pr(VI_DBG, "right tile uv crop x=%d y=%d w=%d h=%d",
+				crop.x, crop.y, crop.w, crop.h);
+		}
+	}
 }
 
-static inline void _post_dma_update(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _post_dma_update(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-
 	if (!ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB Sensor
 		//Update rgbmap dma addr
 		_post_rgbmap_update(ctx, raw_num, vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0]);
@@ -5727,11 +5434,11 @@ static inline void _post_dma_update(struct sop_vi_dev *vdev, const enum sop_isp_
 }
 
 static u32 _is_fisrt_frm_after_drop(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	u32 first_frm_num_after_drop = ctx->isp_pipe_cfg[raw_num].isp_reset_frm;
+	uint32_t first_frm_num_after_drop = ctx->isp_pipe_cfg[raw_num].isp_reset_frm;
 	u32 frm_num = 0;
 
 	frm_num = vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0];
@@ -5744,10 +5451,10 @@ static u32 _is_fisrt_frm_after_drop(
 		return 0;
 }
 
-static inline void _post_ctrl_update(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _post_ctrl_update(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw dst_raw = (ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile)
+	enum cvi_isp_raw dst_raw = (ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile)
 					? raw_num + 1 : raw_num;
 
 	ispblk_post_cfg_update(ctx, raw_num);
@@ -5770,11 +5477,13 @@ static inline void _post_ctrl_update(struct sop_vi_dev *vdev, const enum sop_isp
 	}
 }
 
-static u8 _pre_be_sts_in_use_chk(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num,
-				 const enum sop_isp_be_chn_num chn_num)
+static uint8_t _pre_be_sts_in_use_chk(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum cvi_isp_be_chn_num chn_num)
 {
 	unsigned long flags;
-	static u8 be_in_use;
+	static uint8_t be_in_use;
 
 	if (chn_num == ISP_BE_CH0) {
 		spin_lock_irqsave(&isp_bufpool[raw_num].pre_be_sts_lock, flags);
@@ -5782,8 +5491,7 @@ static u8 _pre_be_sts_in_use_chk(struct sop_vi_dev *vdev, const enum sop_isp_raw
 			be_in_use = 1;
 		} else {
 			be_in_use = 0;
-			if (!(vdev->ctx.isp_pipe_cfg[raw_num].is_tile && vdev->ctx.is_work_on_r_tile))
-				isp_bufpool[raw_num].pre_be_sts_busy_idx ^= 1;
+			isp_bufpool[raw_num].pre_be_sts_busy_idx ^= 1;
 		}
 		spin_unlock_irqrestore(&isp_bufpool[raw_num].pre_be_sts_lock, flags);
 	}
@@ -5792,18 +5500,16 @@ static u8 _pre_be_sts_in_use_chk(struct sop_vi_dev *vdev, const enum sop_isp_raw
 }
 
 static inline void _swap_pre_be_sts_buf(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
-	const enum sop_isp_be_chn_num chn_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum cvi_isp_be_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct _membuf *pool;
-	u8 idx;
-	u64 af_phyaddr;
+	uint8_t idx;
 
 	if (_pre_be_sts_in_use_chk(vdev, raw_num, chn_num) == 0) {
 		pool = &isp_bufpool[raw_num];
-
 		if (_is_be_post_online(ctx))
 			idx = isp_bufpool[raw_num].pre_be_sts_busy_idx ^ 1;
 		else
@@ -5811,22 +5517,16 @@ static inline void _swap_pre_be_sts_buf(
 
 		if (chn_num == ISP_BE_CH0) {
 			//af dma
-			af_phyaddr = pool->sts_mem[idx].af.phy_addr;
-			if (ctx->isp_pipe_cfg[raw_num].is_tile && ctx->is_work_on_r_tile)
-				af_phyaddr += VI_ALIGN(AF_DMA_SIZE);
-
-			ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_AF_W, af_phyaddr);
+			ispblk_dma_config(ctx, raw_num, ISP_BLK_ID_DMA_CTL_AF_W, pool->sts_mem[idx].af.phy_addr);
 		}
-	} else {
-		vi_pr(VI_DBG, "be sts is in use\n");
 	}
 }
 
-static inline void _pre_be_dma_update(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _pre_be_dma_update(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	u64 ir_le, ir_se;
-	u8 idx = 0;
+	uint64_t ir_le, ir_se;
+	uint8_t idx = 0;
 
 	if (ctx->isp_pipe_cfg[raw_num].is_rgbir_sensor && _is_be_post_online(ctx)) {
 		idx = isp_bufpool[raw_num].pre_be_ir_busy_idx;
@@ -5853,88 +5553,46 @@ static inline void _pre_be_dma_update(struct sop_vi_dev *vdev, const enum sop_is
 	}
 }
 
-static inline void _pre_be_ctrl_update(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _pre_be_ctrl_update(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 
 	ispblk_pre_be_cfg_update(ctx, raw_num);
 }
 
-static inline int _isp_clk_dynamic_en(struct sop_vi_dev *vdev, bool en)
-{
-	//if (clk_dynamic_en && vdev->isp_clk[5]) {
-	//	struct isp_ctx *ctx = &vdev->ctx;
-
-	//	if (en && !__clk_is_enabled(vdev->isp_clk[5])) {
-	//		if (clk_enable(vdev->isp_clk[5])) {
-	//			vi_pr(VI_ERR, "[ERR] ISP_CLK(%s) enable fail\n", CLK_ISP_NAME[5]);
-	//			if (_is_fe_be_online(ctx))
-	//				atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
-	//			else if (_is_be_post_online(ctx)) {
-	//				atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_STATE_IDLE);
-	//				atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
-	//			}
-
-	//			return -1;
-	//		}
-
-	//		vi_pr(VI_DBG, "enable clk(%s)\n", CLK_ISP_NAME[5]);
-	//	} else if (!en && __clk_is_enabled(vdev->isp_clk[5])) {
-	//		clk_disable(vdev->isp_clk[5]);
-
-	//		vi_pr(VI_DBG, "disable clk(%s)\n", CLK_ISP_NAME[5]);
-	//	}
-	//} else { //check isp_top_clk is enabled
-	//	struct isp_ctx *ctx = &vdev->ctx;
-
-	//	if (!__clk_is_enabled(vdev->isp_clk[5])) {
-	//		if (clk_enable(vdev->isp_clk[5])) {
-	//			vip_pr(ERR, "[ERR] ISP_CLK(%s) enable fail\n", CLK_ISP_NAME[5]);
-	//			if (_is_fe_be_online(ctx))
-	//				atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
-	//			else if (_is_be_post_online(ctx)) {
-	//				atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_STATE_IDLE);
-	//				atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
-	//			}
-	//		}
-	//	}
-	//}
-
-	return 0;
-}
-
 /*
  * update cfg by raw_num when post_num==0, maybe will update by raw_num and chn_num.
  */
-static void _postraw_update_cfg_from_user(struct sop_vi_dev *vdev, enum sop_isp_raw raw_num)
+static void _postraw_update_cfg_from_user(struct cvi_vi_dev *vdev, enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw = ISP_PRERAW0;
+	enum cvi_isp_raw raw = ISP_PRERAW0;
 	int chn_num = 0;
 
 	//only update [raw_num][chn0]
 	for (; raw < raw_num; raw++) {
 		if (!vdev->ctx.isp_pipe_enable[raw])
 			continue;
-		if (!ctx->isp_pipe_cfg[raw].is_yuv_sensor)
+		if (!ctx->isp_pipe_cfg[raw].is_yuv_sensor) {
 			chn_num++;
-		else
-			chn_num += ctx->isp_pipe_cfg[raw].mux_mode + 1;
+		} else {
+			chn_num += ctx->isp_pipe_cfg[raw].muxMode + 1;
+		}
 	}
 
 	//can't update crop when postraw work on r_tile
 	if (ctx->isp_pipe_cfg[raw_num].is_tile && vdev->postraw_proc_num == 2)
 		return;
 
-	if (!g_vi_ctx->chn_crop[chn_num].enable) {
+	if (!gViCtx->chnCrop[chn_num].bEnable) {
 		ctx->isp_pipe_cfg[raw_num].is_postout_crop = false;
 		return;
 	}
 
-	ctx->isp_pipe_cfg[raw_num].postout_crop.x = g_vi_ctx->chn_crop[chn_num].crop_rect.x;
-	ctx->isp_pipe_cfg[raw_num].postout_crop.y = g_vi_ctx->chn_crop[chn_num].crop_rect.y;
-	ctx->isp_pipe_cfg[raw_num].postout_crop.w = g_vi_ctx->chn_crop[chn_num].crop_rect.width;
-	ctx->isp_pipe_cfg[raw_num].postout_crop.h = g_vi_ctx->chn_crop[chn_num].crop_rect.height;
+	ctx->isp_pipe_cfg[raw_num].postout_crop.x = gViCtx->chnCrop[chn_num].stCropRect.s32X;
+	ctx->isp_pipe_cfg[raw_num].postout_crop.y = gViCtx->chnCrop[chn_num].stCropRect.s32Y;
+	ctx->isp_pipe_cfg[raw_num].postout_crop.w = gViCtx->chnCrop[chn_num].stCropRect.u32Width;
+	ctx->isp_pipe_cfg[raw_num].postout_crop.h = gViCtx->chnCrop[chn_num].stCropRect.u32Height;
 	ctx->isp_pipe_cfg[raw_num].is_postout_crop = true;
 }
 
@@ -5945,11 +5603,11 @@ static void _postraw_update_cfg_from_user(struct sop_vi_dev *vdev, enum sop_isp_
  *  trig preraw if there is output buffer for postraw
  */
 static void _post_hw_enque(
-	struct sop_vi_dev *vdev)
+	struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
-	enum sop_isp_fe_chn_num chn_num = ISP_FE_CH0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_fe_chn_num chn_num = ISP_FE_CH0;
 
 	if (atomic_read(&vdev->isp_streamoff) == 1 && !ctx->is_slice_buf_on) {
 		vi_pr(VI_DBG, "stop streaming\n");
@@ -5982,9 +5640,6 @@ static void _post_hw_enque(
 
 			_postraw_outbuf_enq(vdev, raw_num);
 		}
-
-		if (_isp_clk_dynamic_en(vdev, true) < 0)
-			return;
 
 		ispblk_post_yuv_cfg_update(ctx, raw_num);
 
@@ -6037,7 +5692,6 @@ static void _post_hw_enque(
 
 		{ //Scaler offline mode
 			if (_postraw_outbuf_empty(vdev, raw_num)) {
-				atomic_set(&vdev->out_buf_empty[raw_num], 1);
 				atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_STATE_IDLE);
 				atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
 				return;
@@ -6047,9 +5701,6 @@ static void _post_hw_enque(
 			_postraw_update_cfg_from_user(vdev, raw_num);
 			_postraw_outbuf_enq(vdev, raw_num);
 		}
-
-		if (_isp_clk_dynamic_en(vdev, true) < 0)
-			return;
 
 		ispblk_post_yuv_cfg_update(ctx, raw_num);
 
@@ -6089,18 +5740,10 @@ static void _post_hw_enque(
 	}
 }
 
-static void _splt_hw_enque(struct sop_vi_dev *vdev, const enum sop_isp_raw hw_raw_num)
+static void _splt_hw_enque(struct cvi_vi_dev *vdev, const enum cvi_isp_raw hw_raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	struct isp_buffer *b = NULL;
-	struct isp_queue *splt_w_q = NULL;
-	u32 splt_fe0_w;
-	u32 splt_fe1_w;
-	enum sop_isp_fe_chn_num chn_num, chn_max;
-	enum sop_isp_raw raw_num = hw_raw_num;
-	enum isp_blk_id_t blk_id = (raw_num == ISP_PRERAW0)
-					? ISP_BLK_ID_SPLT_FE0_WDMA
-					: ISP_BLK_ID_SPLT_FE1_WDMA;
+	enum cvi_isp_raw raw_num = hw_raw_num;
 
 	if (atomic_read(&vdev->isp_streamoff) == 1) {
 		vi_pr(VI_DBG, "stop streaming\n");
@@ -6110,15 +5753,6 @@ static void _splt_hw_enque(struct sop_vi_dev *vdev, const enum sop_isp_raw hw_ra
 	if (atomic_read(&vdev->isp_err_handle_flag) == 1) {
 		vi_pr(VI_DBG, "wait err_handing done\n");
 		return;
-	}
-
-	/*disable wdma whnen ai isp ddr retrain */
-	if (ddr_need_retrain(vdev)) {
-		ctx->isp_pipe_cfg[raw_num].is_drop_next_frame = true;
-		if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT)
-			ispblk_splt_wdma_ctrl_config(ctx, blk_id, false);
-		trig_8051_if_pre_idle(vdev);
-		vi_pr(VI_DBG, "ddr need retrain\n");
 	}
 
 	if (_is_right_tile(ctx, raw_num))
@@ -6142,85 +5776,21 @@ static void _splt_hw_enque(struct sop_vi_dev *vdev, const enum sop_isp_raw hw_ra
 		}
 
 		isp_splt_trig(ctx, raw_num);
-	} else if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap) {
-		if (atomic_read(&vdev->splt_state[raw_num][ISP_BE_CH0]) == ISP_STATE_RUNNING) {
-			vi_pr(VI_DBG, "splt_%d chn_%d is running\n", raw_num, ISP_BE_CH0);
-			return;
-		}
-		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
-			if (atomic_read(&vdev->splt_state[raw_num][ISP_BE_CH1]) == ISP_STATE_RUNNING) {
-				vi_pr(VI_DBG, "splt_%d chn_%d is running\n", raw_num, ISP_BE_CH1);
-				return;
-			}
-		}
-
-		if (ctx->isp_pipe_cfg[raw_num].is_tile) {
-			if (atomic_read(&vdev->splt_state[raw_num + 1][ISP_BE_CH0]) == ISP_STATE_RUNNING) {
-				vi_pr(VI_DBG, "splt_%d chn_%d is running\n", raw_num + 1, ISP_BE_CH0);
-				return;
-			}
-			if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
-				if (atomic_read(&vdev->splt_state[raw_num + 1][ISP_BE_CH1]) == ISP_STATE_RUNNING) {
-					vi_pr(VI_DBG, "splt_%d chn_%d is running\n", raw_num + 1, ISP_BE_CH1);
-					return;
-				}
-			}
-		}
-
-		_vi_splt_set_all_state(vdev, raw_num, ISP_STATE_RUNNING);
-
-		chn_max = (ctx->isp_pipe_cfg[raw_num].is_hdr_on) ? ISP_FE_CH1 : ISP_FE_CH0;
-
-		for (chn_num = ISP_FE_CH0; chn_num <= chn_max; chn_num++) {
-			splt_w_q = &splt_out_q[raw_num][chn_num];
-			splt_fe0_w = (chn_num == ISP_FE_CH0) ?
-					ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_LE : ISP_BLK_ID_DMA_CTL_SPLT_FE0_WDMA_SE;
-			splt_fe1_w = (chn_num == ISP_FE_CH0) ?
-					ISP_BLK_ID_DMA_CTL_SPLT_FE1_WDMA_LE : ISP_BLK_ID_DMA_CTL_SPLT_FE1_WDMA_SE;
-
-			// set wdma address
-			b = isp_buf_next(splt_w_q);
-			if (!b) {
-				vi_pr(VI_ERR, "splt_out_%d chn_num_%d is empty, use previous wdma addr.\n",
-						raw_num, ISP_FE_CH0);
-				ctx->isp_pipe_cfg[raw_num].is_fake_splt_wdma = true;
-			} else {
-				ispblk_dma_setaddr(ctx, splt_fe0_w, b->addr);
-				if (ctx->isp_pipe_cfg[raw_num].is_tile) {
-					ispblk_dma_setaddr(ctx, splt_fe1_w,
-						b->addr + (ctx->tile_cfg.r_in.start * 3) / 2);
-				}
-				ctx->isp_pipe_cfg[raw_num].is_fake_splt_wdma = false;
-			}
-		}
-
-		isp_splt_trig(ctx, raw_num);
-	} else if (ctx->isp_pipe_cfg[raw_num].is_tile) {
-		if (vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0] !=
-		    vdev->pre_fe_frm_num[raw_num + 1][ISP_FE_CH0])
-			return;
-
-		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on &&
-		    (vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0] !=
-		     vdev->pre_fe_frm_num[raw_num + 1][ISP_FE_CH1]))
-			return;
-
-		vi_pr(VI_DBG, "in tile mode, trig spliter raw_num = %d/%d\n", raw_num, raw_num + 1);
-		isp_splt_trig(ctx, raw_num);
 	} else if (line_spliter_en) {
 		isp_splt_trig(ctx, raw_num);
+
 	}
 }
 
 static void _pre_fe_rgbmap_update(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
-	const enum sop_isp_fe_chn_num chn_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	u8 rgbmap_idx = (vdev->pre_fe_frm_num[raw_num][chn_num]) % RGBMAP_BUF_IDX;
-	u32 dma_id = 0;
-	u64 buffaddr = 0;
+	uint8_t rgbmap_idx = (vdev->pre_fe_frm_num[raw_num][chn_num]) % RGBMAP_BUF_IDX;
+	uint32_t dma_id = 0;
+	uint64_t buffaddr = 0;
 
 	if (chn_num == ISP_FE_CH0) {
 		dma_id = rgbmap_dma_find_hwid(raw_num, ISP_RAW_PATH_LE);
@@ -6254,7 +5824,7 @@ static void _pre_fe_rgbmap_update(
 	}
 }
 
-void vi_destory_thread(struct sop_vi_dev *vdev, enum E_VI_TH th_id)
+void vi_destory_thread(struct cvi_vi_dev *vdev, enum E_VI_TH th_id)
 {
 	if (th_id < 0 || th_id >= E_VI_TH_MAX) {
 		pr_err("No such thread_id(%d)\n", th_id);
@@ -6275,7 +5845,7 @@ void vi_destory_thread(struct sop_vi_dev *vdev, enum E_VI_TH th_id)
 	}
 }
 
-int vi_create_thread(struct sop_vi_dev *vdev, enum E_VI_TH th_id)
+int vi_create_thread(struct cvi_vi_dev *vdev, enum E_VI_TH th_id)
 {
 	struct sched_param param;
 	int rc = 0;
@@ -6290,27 +5860,33 @@ int vi_create_thread(struct sop_vi_dev *vdev, enum E_VI_TH th_id)
 	if (vdev->vi_th[th_id].w_thread == NULL) {
 		switch (th_id) {
 		case E_VI_TH_PRERAW:
-			memcpy(vdev->vi_th[th_id].th_name, "task_isp_pre", sizeof(vdev->vi_th[th_id].th_name));
+			memcpy(vdev->vi_th[th_id].th_name, "cvitask_isp_pre",
+				sizeof(vdev->vi_th[th_id].th_name));
 			vdev->vi_th[th_id].th_handler = _vi_preraw_thread;
 			break;
 		case E_VI_TH_VBLANK_HANDLER:
-			memcpy(vdev->vi_th[th_id].th_name, "task_isp_blank", sizeof(vdev->vi_th[th_id].th_name));
+			memcpy(vdev->vi_th[th_id].th_name, "cvitask_isp_blank",
+				sizeof(vdev->vi_th[th_id].th_name));
 			vdev->vi_th[th_id].th_handler = _vi_vblank_handler_thread;
 			break;
 		case E_VI_TH_ERR_HANDLER:
-			memcpy(vdev->vi_th[th_id].th_name, "task_isp_err", sizeof(vdev->vi_th[th_id].th_name));
+			memcpy(vdev->vi_th[th_id].th_name, "cvitask_isp_err",
+				sizeof(vdev->vi_th[th_id].th_name));
 			vdev->vi_th[th_id].th_handler = _vi_err_handler_thread;
 			break;
 		case E_VI_TH_EVENT_HANDLER:
-			memcpy(vdev->vi_th[th_id].th_name, "vi_event_handler", sizeof(vdev->vi_th[th_id].th_name));
+			memcpy(vdev->vi_th[th_id].th_name, "vi_event_handler",
+				sizeof(vdev->vi_th[th_id].th_name));
 			vdev->vi_th[th_id].th_handler = _vi_event_handler_thread;
 			break;
 		case E_VI_TH_RUN_TPU1:
-			memcpy(vdev->vi_th[th_id].th_name, "ai_isp_tpu1", sizeof(vdev->vi_th[th_id].th_name));
+			memcpy(vdev->vi_th[th_id].th_name, "ai_isp_tpu1",
+				sizeof(vdev->vi_th[th_id].th_name));
 			vdev->vi_th[th_id].th_handler = _vi_run_tpu_thread1;
 			break;
 		case E_VI_TH_RUN_TPU2:
-			memcpy(vdev->vi_th[th_id].th_name, "ai_isp_tpu2", sizeof(vdev->vi_th[th_id].th_name));
+			memcpy(vdev->vi_th[th_id].th_name, "ai_isp_tpu2",
+				sizeof(vdev->vi_th[th_id].th_name));
 			vdev->vi_th[th_id].th_handler = _vi_run_tpu_thread2;
 			break;
 		default:
@@ -6338,16 +5914,19 @@ int vi_create_thread(struct sop_vi_dev *vdev, enum E_VI_TH th_id)
 	return rc;
 }
 
-static void _vi_sw_init(struct sop_vi_dev *vdev)
+static void _vi_sw_init(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	struct sop_vi_ctx *vi_proc_ctx = NULL;
+	struct cvi_vi_ctx *pviProcCtx = NULL;
 	u8 i = 0, j = 0;
 
-	vi_proc_ctx = (struct sop_vi_ctx *)(vdev->shared_mem);
+	pviProcCtx = (struct cvi_vi_ctx *)(vdev->shared_mem);
 
+#if (KERNEL_VERSION(4, 15, 0) <= LINUX_VERSION_CODE)
 	timer_setup(&usr_pic_timer.t, legacy_timer_emu_func, 0);
-
+#else
+	init_timer(&usr_pic_timer);
+#endif
 	ctx->is_tile            = false;
 	ctx->is_offline_be      = true;
 	ctx->is_offline_postraw = false;
@@ -6368,13 +5947,14 @@ static void _vi_sw_init(struct sop_vi_dev *vdev)
 	vdev->postraw_proc_num  = 0;
 	vdev->tpu_thread_num    = 0;
 	vdev->usr_pic_delay     = 0;
-	vdev->isp_source        = ISP_SOURCE_DEV;
+	vdev->isp_source        = CVI_ISP_SOURCE_DEV;
 
-	if (vi_proc_ctx->vi_stt != VI_SUSPEND)
-		memset(vdev->snr_info, 0, sizeof(struct sop_isp_snr_info) * ISP_PRERAW_MAX);
+	if (pviProcCtx->vi_stt != VI_SUSPEND)
+		memset(vdev->snr_info, 0, sizeof(struct cvi_isp_snr_info) * ISP_PRERAW_MAX);
 
-	for (i = 0; i < ISP_RAW_PATH_MAX; i++)
+	for (i = 0; i < ISP_RAW_PATH_MAX; i++) {
 		vdev->usr_pic_phy_addr[i] = 0;
+	}
 
 	for (i = 0; i < ISP_PRERAW_MAX; i++) {
 		vdev->preraw_first_frm[i]     = true;
@@ -6385,12 +5965,11 @@ static void _vi_sw_init(struct sop_vi_dev *vdev)
 		ctx->mmap_grid_size[i]        = 3;
 		ctx->isp_pipe_enable[i]       = false;
 		ctx->raw_chnstr_num[i]        = 0;
-
 		ctx->isp_bind_info[i].is_bind = false;
 		ctx->isp_bind_info[i].bind_dev_num = ISP_PRERAW_MAX;
+		ctx->isp_pipe_cfg[i].is_raw_ai_isp = false;
 
 		memset(&ctx->isp_pipe_cfg[i], 0, sizeof(struct _isp_cfg));
-		ctx->isp_pipe_cfg[i].raw_ai_isp_ap = 0;
 		ctx->isp_pipe_cfg[i].is_offline_scaler = true;
 		ctx->isp_pipe_cfg[i].tnr_mode = (ctx->is_3dnr_on) ?
 						ISP_TNR_TYPE_OLD_MODE :
@@ -6403,8 +5982,9 @@ static void _vi_sw_init(struct sop_vi_dev *vdev)
 			atomic_set(&vdev->pre_fe_state[i][j], ISP_STATE_IDLE);
 		}
 
-		for (j = 0; j < ISP_BE_CHN_MAX; j++)
+		for (j = 0; j < ISP_BE_CHN_MAX; j++) {
 			vdev->pre_be_frm_num[i][j] = 0;
+		}
 
 		spin_lock_init(&snr_node_lock[i]);
 
@@ -6479,9 +6059,6 @@ static void _vi_sw_init(struct sop_vi_dev *vdev)
 		INIT_LIST_HEAD(&postraw_in_q[i].rdy_queue);
 		pre_be_out_q[i].num_rdy     = 0;
 		postraw_in_q[i].num_rdy     = 0;
-
-		spin_lock_init(&dq_lock[i]);
-		spin_lock_init(&vdev->qbuf_lock[i]);
 	}
 
 	for (i = 0; i < VI_MAX_CHN_NUM; i++) {
@@ -6505,7 +6082,9 @@ static void _vi_sw_init(struct sop_vi_dev *vdev)
 
 	spin_lock_init(&buf_lock);
 	spin_lock_init(&raw_num_lock);
+	spin_lock_init(&dq_lock);
 	spin_lock_init(&event_lock);
+	spin_lock_init(&vdev->qbuf_lock);
 
 	init_waitqueue_head(&vdev->isp_event_wait_q);
 	init_waitqueue_head(&vdev->isp_dbg_wait_q);
@@ -6513,11 +6092,11 @@ static void _vi_sw_init(struct sop_vi_dev *vdev)
 	vi_tuning_sw_init();
 }
 
-static void _vi_init_param(struct sop_vi_dev *vdev)
+static void _vi_init_param(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	int enable_dev_num = vdev->num_dev;
-	u8 i = 0;
+	uint8_t i = 0;
 
 	atomic_set(&dev_open_cnt, 0);
 
@@ -6530,7 +6109,7 @@ static void _vi_init_param(struct sop_vi_dev *vdev)
 		ctx->rgb_color_mode[i]                  = ISP_BAYER_TYPE_GB;
 		ctx->isp_pipe_cfg[i].is_patgen_en       = false;
 		ctx->isp_pipe_cfg[i].is_raw_replay_be   = false;
-		ctx->isp_pipe_cfg[i].is_yuv_sensor      = false;
+		ctx->isp_pipe_cfg[i].is_yuv_sensor = false;
 		ctx->isp_pipe_cfg[i].is_drop_next_frame = false;
 		ctx->isp_pipe_cfg[i].isp_reset_frm      = 0;
 		ctx->isp_pipe_cfg[i].is_422_to_420      = false;
@@ -6540,7 +6119,7 @@ static void _vi_init_param(struct sop_vi_dev *vdev)
 		ctx->isp_pipe_cfg[i].csibdg_height      = 0;
 		ctx->isp_pipe_cfg[i].yuv_scene_mode     = ISP_YUV_SCENE_BYPASS;
 
-		g_vi_ctx->is_dev_enable[i] = false;
+		gViCtx->isDevEnable[i] = false;
 
 		INIT_LIST_HEAD(&raw_dump_b_dq[i].rdy_queue);
 		INIT_LIST_HEAD(&raw_dump_b_se_dq[i].rdy_queue);
@@ -6588,46 +6167,39 @@ static void _vi_init_param(struct sop_vi_dev *vdev)
 	atomic_set(&vdev->isp_streamon, 0);
 }
 
-int vi_mac_clk_ctrl(struct sop_vi_dev *vdev, u8 mac_num, u8 enable)
+int vi_mac_clk_ctrl(struct cvi_vi_dev *vdev, u8 mac_num, u8 enable)
 {
 	int rc = 0;
 
 	if (mac_num >= ARRAY_SIZE(vdev->clk_mac))
 		return rc;
 
-	vi_pr(VI_INFO, "set mac_clk(%d) enable(%d), current sts:%d\n",
-	      mac_num, enable, vdev->is_clk_enable[mac_num]);
-
 	if (vdev->clk_mac[mac_num]) {
 		if (enable) {
-			if (vdev->is_clk_enable[mac_num])
-				goto EXIT;
 			if (clk_prepare_enable(vdev->clk_mac[mac_num])) {
 				vi_pr(VI_ERR, "Failed to prepare and enable clk_mac(%d)\n", mac_num);
 				rc = -EAGAIN;
 				goto EXIT;
 			}
-			vdev->is_clk_enable[mac_num] = 1;
 		} else {
-			if (!vdev->is_clk_enable[mac_num])
-				goto EXIT;
 			if (__clk_is_enabled(vdev->clk_mac[mac_num]))
 				clk_disable_unprepare(vdev->clk_mac[mac_num]);
 			else
 				clk_unprepare(vdev->clk_mac[mac_num]);
-			vdev->is_clk_enable[mac_num] = 0;
 		}
 	} else {
 		vi_pr(VI_ERR, "clk_mac(%d) is null\n", mac_num);
 		rc = -EAGAIN;
 		goto EXIT;
 	}
+
+	vi_pr(VI_INFO, "clk_mac(%d) enalbe[%d]\n", mac_num, enable);
 EXIT:
 	return rc;
 }
 
 #ifndef FPGA_PORTING
-static int _vi_clk_ctrl(struct sop_vi_dev *vdev, u8 enable)
+static int _vi_clk_ctrl(struct cvi_vi_dev *vdev, u8 enable)
 {
 	u8 i = 0;
 	int rc = 0;
@@ -6684,23 +6256,25 @@ EXIT:
 }
 #endif
 
-void _vi_sdk_release(struct sop_vi_dev *vdev)
+void _vi_sdk_release(struct cvi_vi_dev *vdev)
 {
 	u8 i = 0;
 	struct isp_ctx *ctx = &vdev->ctx;
 
+	// vi_disable_chn(0);
+
 	for (i = 0; i < VI_MAX_CHN_NUM; i++) {
-		memset(&g_vi_ctx->chn_attr[i], 0, sizeof(vi_chn_attr_s));
-		memset(&g_vi_ctx->chn_status[i], 0, sizeof(vi_chn_status_s));
-		g_vi_ctx->blk_size[i] = 0;
-		g_vi_ctx->bypass_frm[i] = 0;
+		memset(&gViCtx->chnAttr[i], 0, sizeof(VI_CHN_ATTR_S));
+		memset(&gViCtx->chnStatus[i], 0, sizeof(VI_CHN_STATUS_S));
+		gViCtx->blk_size[i] = 0;
+		gViCtx->bypass_frm[i] = 0;
 	}
 
 	for (i = 0; i < VI_MAX_PIPE_NUM; i++)
-		g_vi_ctx->is_pipe_created[i] = false;
+		gViCtx->isPipeCreated[i] = false;
 
 	for (i = 0; i < VI_MAX_DEV_NUM; i++)
-		g_vi_ctx->is_dev_enable[i] = false;
+		gViCtx->isDevEnable[i] = false;
 
 	for (i = 0; i < ISP_PRERAW_MAX; i++) {
 		memset(&ctx->isp_pipe_cfg[i], 0, sizeof(struct _isp_cfg));
@@ -6708,22 +6282,25 @@ void _vi_sdk_release(struct sop_vi_dev *vdev)
 	}
 }
 
-static int _vi_create_proc(struct sop_vi_dev *vdev)
+static int _vi_create_proc(struct cvi_vi_dev *vdev)
 {
 	struct file *filp = NULL;
 	int ret = 0;
 
 	// make sure /proc/v4l2 exist
 	filp = filp_open("/proc/v4l2", O_RDONLY, 0);
-	if (IS_ERR(filp))
+	if (IS_ERR(filp)) {
 		proc_mkdir("v4l2", NULL);
-	else
+	} else {
 		filp_close(filp, 0);
+	}
 
 	/* vi proc setup */
 	vdev->shared_mem = kzalloc(VI_SHARE_MEM_SIZE, GFP_ATOMIC);
-	if (!vdev->shared_mem)
+	if (!vdev->shared_mem) {
+		pr_err("shared_mem alloc size(%d) failed\n", VI_SHARE_MEM_SIZE);
 		return -ENOMEM;
+	}
 
 	if (vi_proc_init(vdev, vdev->shared_mem) < 0) {
 		pr_err("vi proc init failed\n");
@@ -6743,7 +6320,7 @@ static int _vi_create_proc(struct sop_vi_dev *vdev)
 	return ret;
 }
 
-static void _vi_destroy_proc(struct sop_vi_dev *vdev)
+static void _vi_destroy_proc(struct cvi_vi_dev *vdev)
 {
 	vi_proc_remove();
 	vi_dbg_proc_remove();
@@ -6753,70 +6330,9 @@ static void _vi_destroy_proc(struct sop_vi_dev *vdev)
 	isp_proc_remove();
 }
 
-static int get_dma_buf_size(struct sop_vi_dev *vdev)
-{
-	struct isp_ctx *ctx = &vdev->ctx;
-	u32 tmp_size = 0;
-	u32 buf_size = 0;
-	u8 raw_num = 0;
-	int i;
-
-	tmp_size = isp_mempool.size;
-	isp_mempool.base = 0xabde2000; //tmp addr only for check alignment
-	isp_mempool.size = 0x40000000; //1024M
-	isp_mempool.byteused = 0;
-
-	_vi_scene_ctrl(vdev);
-
-	for (i = ISP_PRERAW0; i < ISP_PRERAW_MAX; i++) {
-		if (!ctx->isp_pipe_enable[i])
-			continue;
-		if (ctx->isp_pipe_cfg[i].is_yuv_sensor)
-			raw_num = ctx->isp_bind_info[i].bind_fe_num;
-		else
-			raw_num = i;
-		ctx->isp_pipe_cfg[raw_num].is_patgen_en = csi_patgen_en[raw_num];
-		if (ctx->isp_pipe_cfg[raw_num].is_patgen_en) {
-			vdev->usr_fmt.width = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w;
-			vdev->usr_fmt.height = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h;
-			vdev->usr_crop.width = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w;
-			vdev->usr_crop.height = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h;
-
-			vdev->usr_fmt.code = ISP_BAYER_TYPE_BG;
-			vdev->usr_crop.left = 0;
-			vdev->usr_crop.top = 0;
-		}
-		vi_pr(VI_INFO, "pipe_%d patgen(%d), [usr]w_h(%d:%d), color mode(%d), [snr]w/h(%d:%d)\n",
-						i, vdev->ctx.isp_pipe_cfg[raw_num].is_patgen_en,
-						vdev->usr_fmt.width, vdev->usr_fmt.height, vdev->usr_fmt.code,
-						vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w,
-						vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h);
-
-		_vi_ctrl_init(raw_num, vdev);
-	}
-
-	if (ctx->isp_pipe_cfg[ISP_PRERAW0].is_tile) {
-		ctx->isp_pipe_enable[ISP_PRERAW1] = true;
-		ctx->isp_bind_info[ISP_PRERAW1].is_bind = true;
-		ctx->isp_bind_info[ISP_PRERAW1].bind_dev_num = ctx->isp_bind_info[ISP_PRERAW0].bind_dev_num;
-		ctx->isp_bind_info[ISP_PRERAW1].bind_fe_num = ISP_PRERAW1;
-		_isp_tile_calc_size(ctx);
-	}
-
-	_vi_get_dma_buf_size(ctx);
-
-	buf_size = isp_mempool.byteused;
-
-	isp_mempool.base	= 0;
-	isp_mempool.size	= tmp_size;
-	isp_mempool.byteused	= 0;
-
-	return buf_size;
-}
-
 static int _vi_event_handler_thread(void *arg)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)arg;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)arg;
 #ifdef FPGA_PORTING
 	u32 timeout = 100000;//ms
 #else
@@ -6843,28 +6359,27 @@ static int _vi_event_handler_thread(void *arg)
 
 		if (!ret) {
 			vi_pr(VI_INFO, "raw_%d vi_event_handler timeout(%d)ms\n", flag, timeout);
-			if (++g_vi_ctx->timeout_cnt >= 2) {
+			if (++gViCtx->timeout_cnt >= 2) {
 				atomic_set(&vdev->isp_dbg_flag, 1);
 				wake_up(&vdev->isp_dbg_wait_q);
-				g_vi_ctx->timeout_cnt = 0;
+				gViCtx->timeout_cnt = 0;
 			}
 			continue;
 		} else {
 			u8 raw_num = flag;
-			struct sop_isp_buf *b = NULL;
+			struct cvi_isp_buf *b = NULL;
 			int index;
 			u32 frm_num = vdev->postraw_frame_number[raw_num];
-			bool is_bypass = frm_num > g_vi_ctx->bypass_frm[raw_num] ? 0 : 1;
+			bool is_bypass = frm_num > gViCtx->bypass_frm[raw_num] ? 0 : 1;
 			unsigned long flags;
 
-			spin_lock_irqsave(&vdev->qbuf_lock[raw_num], flags);
+			spin_lock_irqsave(&vdev->qbuf_lock, flags);
 			if (!list_empty(&vdev->qbuf_list[raw_num])) {
-				b = list_first_entry(&vdev->qbuf_list[raw_num], struct sop_isp_buf, list);
+				b = list_first_entry(&vdev->qbuf_list[raw_num], struct cvi_isp_buf, list);
 				index = b->buf.vb2_buf.index;
 
-				if (atomic_read(&vdev->isp_dump_yuv[raw_num])) {
+				if (atomic_read(&vdev->isp_dump_yuv[raw_num])){
 					struct vb2_buffer *vb2_buf = NULL;
-
 					vi_pr(VI_INFO, "start to dump yuv\n");
 					vb2_buf = &(b->buf.vb2_buf);
 					copy_vb2buf_to_dump(vb2_buf);
@@ -6885,7 +6400,7 @@ static int _vi_event_handler_thread(void *arg)
 				vi_pr(VI_DBG, "raw_%d index:%d\n", raw_num, index);
 
 				if (list_is_singular(&vdev->qbuf_list[raw_num])) {
-					b = list_first_entry(&vdev->dqbuf_list[raw_num], struct sop_isp_buf, list);
+					b = list_first_entry(&vdev->dqbuf_list[raw_num], struct cvi_isp_buf, list);
 					index = b->buf.vb2_buf.index;
 					list_move(&b->list, &vdev->qbuf_list[raw_num]);
 					vdev->qbuf_num[raw_num]++;
@@ -6893,26 +6408,25 @@ static int _vi_event_handler_thread(void *arg)
 				}
 			} else {
 				vi_pr(VI_INFO, "raw_%d qbuf is empty!\n", raw_num);
-				spin_unlock_irqrestore(&vdev->qbuf_lock[raw_num], flags);
+				spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 				continue;
 			}
-			spin_unlock_irqrestore(&vdev->qbuf_lock[raw_num], flags);
+			spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 
 			if (is_bypass) {
 				struct _isp_dqbuf_n *n = NULL;
-
-				spin_lock_irqsave(&dq_lock[raw_num], flags);
+				spin_lock_irqsave(&dq_lock, flags);
 				if (!list_empty(&dqbuf_q[raw_num].list)) {
 					n = list_first_entry(&dqbuf_q[raw_num].list, struct _isp_dqbuf_n, list);
 					list_del_init(&n->list);
 					kfree(n);
 				}
-				spin_unlock_irqrestore(&dq_lock[raw_num], flags);
+				spin_unlock_irqrestore(&dq_lock, flags);
 			}
 
 			if (atomic_read(&vdev->post_dq_flag[raw_num]) == 1 && !is_bypass) {
-				atomic_set(&vdev->post_dq_flag[raw_num], 0);
 				wake_up(&vdev->isp_dq_wait_q[raw_num]);
+				atomic_set(&vdev->post_dq_flag[raw_num], 0);
 			}
 		}
 	}
@@ -6926,7 +6440,7 @@ static int _vi_event_handler_thread(void *arg)
 
 static void _vi_record_debug_info(struct isp_ctx *ctx)
 {
-	u8 i = 0;
+	uint8_t i = 0;
 	uintptr_t isptop = ctx->phys_regs[ISP_BLK_ID_ISPTOP];
 	uintptr_t preraw_fe = ctx->phys_regs[ISP_BLK_ID_PRE_RAW_FE0];
 	uintptr_t preraw_be = ctx->phys_regs[ISP_BLK_ID_PRE_RAW_BE];
@@ -6934,80 +6448,90 @@ static void _vi_record_debug_info(struct isp_ctx *ctx)
 	uintptr_t rgbtop = ctx->phys_regs[ISP_BLK_ID_RGBTOP];
 	uintptr_t rawtop = ctx->phys_regs[ISP_BLK_ID_RAWTOP];
 	uintptr_t rdma28 = ctx->phys_regs[ISP_BLK_ID_DMA_CTL_RAW_RDMA0];
-	struct vi_info *vi_info = NULL;
+	struct cvi_vi_info *vi_info = NULL;
 
-	if (g_overflow_info)
+	if (gOverflowInfo != NULL)
 		return;
 
-	g_overflow_info = kzalloc(sizeof(*g_overflow_info), GFP_ATOMIC);
-	if (!g_overflow_info) {
-		vi_pr(VI_ERR, "g_overflow_info kzalloc size(%zu) fail\n", sizeof(struct overflow_info));
+	gOverflowInfo = kzalloc(sizeof(struct cvi_overflow_info), GFP_ATOMIC);
+	if (gOverflowInfo == NULL) {
+		vi_pr(VI_ERR, "gOverflowInfo kzalloc size(%zu) fail\n", sizeof(struct cvi_overflow_info));
 		return;
 	}
 
-	vi_info = &g_overflow_info->vi_info;
+	vi_info = &gOverflowInfo->vi_info;
 
 	//isp_top
-	vi_info->isp_top.blk_idle = ISP_RD_REG(isptop, reg_isp_top_t, blk_idle);
+	vi_info->isp_top.blk_idle = ISP_RD_REG(isptop, REG_ISP_TOP_T, BLK_IDLE);
 	for (i = 0; i <= 6; i++) {
 		//Debug
-		ISP_WR_BITS(isptop, reg_isp_top_t, dummy, dbus_sel, i);
-		vi_info->isp_top.dbus_sel[i].r_0 = ISP_RD_REG(isptop, reg_isp_top_t, dbus0); //0x0A070040
-		vi_info->isp_top.dbus_sel[i].r_4 = ISP_RD_REG(isptop, reg_isp_top_t, dbus1); //0x0A070044
-		vi_info->isp_top.dbus_sel[i].r_8 = ISP_RD_REG(isptop, reg_isp_top_t, dbus2); //0x0A070048
-		vi_info->isp_top.dbus_sel[i].r_c = ISP_RD_REG(isptop, reg_isp_top_t, dbus3); //0x0A07004C
+		ISP_WR_BITS(isptop, REG_ISP_TOP_T, DUMMY, DBUS_SEL, i);
+		vi_info->isp_top.dbus_sel[i].r_0 = ISP_RD_REG(isptop, REG_ISP_TOP_T, DBUS0); //0x0A070040
+		vi_info->isp_top.dbus_sel[i].r_4 = ISP_RD_REG(isptop, REG_ISP_TOP_T, DBUS1); //0x0A070044
+		vi_info->isp_top.dbus_sel[i].r_8 = ISP_RD_REG(isptop, REG_ISP_TOP_T, DBUS2); //0x0A070048
+		vi_info->isp_top.dbus_sel[i].r_c = ISP_RD_REG(isptop, REG_ISP_TOP_T, DBUS3); //0x0A07004C
 	}
 
 	//pre_raw_fe
-	vi_info->preraw_fe.preraw_info = ISP_RD_REG(preraw_fe, reg_pre_raw_fe_t, pre_raw_info);
-	vi_info->preraw_fe.fe_idle_info = ISP_RD_REG(preraw_fe, reg_pre_raw_fe_t, fe_idle_info);
+	vi_info->preraw_fe.preraw_info = ISP_RD_REG(preraw_fe, REG_PRE_RAW_FE_T, PRE_RAW_INFO);
+	vi_info->preraw_fe.fe_idle_info = ISP_RD_REG(preraw_fe, REG_PRE_RAW_FE_T, FE_IDLE_INFO);
 
 	//pre_raw_be
-	vi_info->preraw_be.preraw_be_info = ISP_RD_REG(preraw_be, reg_pre_raw_be_t, be_info);
-	vi_info->preraw_be.be_dma_idle_info = ISP_RD_REG(preraw_be, reg_pre_raw_be_t, be_dma_idle_info);
-	vi_info->preraw_be.ip_idle_info = ISP_RD_REG(preraw_be, reg_pre_raw_be_t, be_ip_idle_info);
-	vi_info->preraw_be.stvalid_status = ISP_RD_REG(preraw_be, reg_pre_raw_be_t, tvalid_status);
-	vi_info->preraw_be.stready_status = ISP_RD_REG(preraw_be, reg_pre_raw_be_t, tready_status);
+	vi_info->preraw_be.preraw_be_info = ISP_RD_REG(preraw_be, REG_PRE_RAW_BE_T, BE_INFO);
+	vi_info->preraw_be.be_dma_idle_info = ISP_RD_REG(preraw_be, REG_PRE_RAW_BE_T, BE_DMA_IDLE_INFO);
+	vi_info->preraw_be.ip_idle_info = ISP_RD_REG(preraw_be, REG_PRE_RAW_BE_T, BE_IP_IDLE_INFO);
+	vi_info->preraw_be.stvalid_status = ISP_RD_REG(preraw_be, REG_PRE_RAW_BE_T, TVALID_STATUS);
+	vi_info->preraw_be.stready_status = ISP_RD_REG(preraw_be, REG_PRE_RAW_BE_T, TREADY_STATUS);
 
 	//rawtop
-	vi_info->rawtop.stvalid_status = ISP_RD_REG(rawtop, reg_raw_top_t, stvalid_status);
-	vi_info->rawtop.stready_status = ISP_RD_REG(rawtop, reg_raw_top_t, stready_status);
-	vi_info->rawtop.dma_idle = ISP_RD_REG(rawtop, reg_raw_top_t, dma_idle);
+	vi_info->rawtop.stvalid_status = ISP_RD_REG(rawtop, REG_RAW_TOP_T, STVALID_STATUS);
+	vi_info->rawtop.stready_status = ISP_RD_REG(rawtop, REG_RAW_TOP_T, STREADY_STATUS);
+	vi_info->rawtop.dma_idle = ISP_RD_REG(rawtop, REG_RAW_TOP_T, DMA_IDLE);
+
+#if 0
+	ISP_WR_BITS(isptop, REG_RAW_TOP_T, DEBUG_SELECT, RAW_TOP_DEBUG_SELECT, 0);
+	vi_pr(VI_INFO, "RAW_TOP, debug_select(h2c)=0x0, debug(h28)=0x%x\n",
+		ISP_RD_REG(rawtop, REG_RAW_TOP_T, DEBUG));
+
+	ISP_WR_BITS(isptop, REG_RAW_TOP_T, DEBUG_SELECT, RAW_TOP_DEBUG_SELECT, 4);
+	vi_pr(VI_INFO, "RAW_TOP, debug_select(h2c)=0x4, debug(h28)=0x%x\n",
+		ISP_RD_REG(rawtop, REG_RAW_TOP_T, DEBUG));
+#endif
 
 	//rgbtop
-	vi_info->rgbtop.ip_stvalid_status = ISP_RD_REG(rgbtop, reg_isp_rgb_top_t, dbg_ip_s_vld);
-	vi_info->rgbtop.ip_stready_status = ISP_RD_REG(rgbtop, reg_isp_rgb_top_t, dbg_ip_s_rdy);
-	vi_info->rgbtop.dmi_stvalid_status = ISP_RD_REG(rgbtop, reg_isp_rgb_top_t, dbg_dmi_vld);
-	vi_info->rgbtop.dmi_stready_status = ISP_RD_REG(rgbtop, reg_isp_rgb_top_t, dbg_dmi_rdy);
-	vi_info->rgbtop.xcnt_rpt = ISP_RD_BITS(rgbtop, reg_isp_rgb_top_t, patgen4, xcnt_rpt);
-	vi_info->rgbtop.ycnt_rpt = ISP_RD_BITS(rgbtop, reg_isp_rgb_top_t, patgen4, ycnt_rpt);
+	vi_info->rgbtop.ip_stvalid_status = ISP_RD_REG(rgbtop, REG_ISP_RGB_TOP_T, DBG_IP_S_VLD);
+	vi_info->rgbtop.ip_stready_status = ISP_RD_REG(rgbtop, REG_ISP_RGB_TOP_T, DBG_IP_S_RDY);
+	vi_info->rgbtop.dmi_stvalid_status = ISP_RD_REG(rgbtop, REG_ISP_RGB_TOP_T, DBG_DMI_VLD);
+	vi_info->rgbtop.dmi_stready_status = ISP_RD_REG(rgbtop, REG_ISP_RGB_TOP_T, DBG_DMI_RDY);
+	vi_info->rgbtop.xcnt_rpt = ISP_RD_BITS(rgbtop, REG_ISP_RGB_TOP_T, PATGEN4, XCNT_RPT);
+	vi_info->rgbtop.ycnt_rpt = ISP_RD_BITS(rgbtop, REG_ISP_RGB_TOP_T, PATGEN4, YCNT_RPT);
 
 	//yuvtop
-	vi_info->yuvtop.debug_state = ISP_RD_REG(yuvtop, reg_yuv_top_t, yuv_debug_state);
-	vi_info->yuvtop.stvalid_status = ISP_RD_REG(yuvtop, reg_yuv_top_t, stvalid_status);
-	vi_info->yuvtop.stready_status = ISP_RD_REG(yuvtop, reg_yuv_top_t, stready_status);
-	vi_info->yuvtop.xcnt_rpt = ISP_RD_BITS(yuvtop, reg_yuv_top_t, patgen4, xcnt_rpt);
-	vi_info->yuvtop.ycnt_rpt = ISP_RD_BITS(yuvtop, reg_yuv_top_t, patgen4, ycnt_rpt);
+	vi_info->yuvtop.debug_state = ISP_RD_REG(yuvtop, REG_YUV_TOP_T, YUV_DEBUG_STATE);
+	vi_info->yuvtop.stvalid_status = ISP_RD_REG(yuvtop, REG_YUV_TOP_T, STVALID_STATUS);
+	vi_info->yuvtop.stready_status = ISP_RD_REG(yuvtop, REG_YUV_TOP_T, STREADY_STATUS);
+	vi_info->yuvtop.xcnt_rpt = ISP_RD_BITS(yuvtop, REG_YUV_TOP_T, PATGEN4, XCNT_RPT);
+	vi_info->yuvtop.ycnt_rpt = ISP_RD_BITS(yuvtop, REG_YUV_TOP_T, PATGEN4, YCNT_RPT);
 
 	//rdma28
-	ISP_WR_BITS(rdma28, reg_isp_dma_ctl_t, sys_control, dbg_sel, 0x1);
+	ISP_WR_BITS(rdma28, REG_ISP_DMA_CTL_T, SYS_CONTROL, DBG_SEL, 0x1);
 	vi_info->rdma28[0].dbg_sel = 0x1;
-	vi_info->rdma28[0].status = ISP_RD_REG(rdma28, reg_isp_dma_ctl_t, dma_status);
-	ISP_WR_BITS(rdma28, reg_isp_dma_ctl_t, sys_control, dbg_sel, 0x2);
+	vi_info->rdma28[0].status = ISP_RD_REG(rdma28, REG_ISP_DMA_CTL_T, DMA_STATUS);
+	ISP_WR_BITS(rdma28, REG_ISP_DMA_CTL_T, SYS_CONTROL, DBG_SEL, 0x2);
 	vi_info->rdma28[1].dbg_sel = 0x2;
-	vi_info->rdma28[1].status = ISP_RD_REG(rdma28, reg_isp_dma_ctl_t, dma_status);
+	vi_info->rdma28[1].status = ISP_RD_REG(rdma28, REG_ISP_DMA_CTL_T, DMA_STATUS);
 	vi_info->enable = true;
 }
 
 static void _vi_show_debug_info(void)
 {
-	struct vi_info *vi_info = NULL;
-	u8 i = 0;
+	struct cvi_vi_info *vi_info = NULL;
+	uint8_t i = 0;
 
-	if (!g_overflow_info)
+	if (gOverflowInfo == NULL)
 		return;
 
-	vi_info = &g_overflow_info->vi_info;
+	vi_info = &gOverflowInfo->vi_info;
 
 	if (vi_info->enable) {
 		vi_info->enable = false;
@@ -7058,17 +6582,16 @@ static void _vi_show_debug_info(void)
 			vi_info->rdma28[1].status);
 	}
 
-	kfree(g_overflow_info);
-	g_overflow_info = NULL;
+	kfree(gOverflowInfo);
+	gOverflowInfo = NULL;
 }
 
-static void _vi_err_retrig_pre_fe(struct sop_vi_dev *vdev)
+static void _vi_err_retrig_pre_fe(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num, actual_raw;
-	enum sop_isp_fe_chn_num fe_max, fe_chn;
+	enum cvi_isp_raw raw_num;
+	enum cvi_isp_fe_chn_num fe_max, fe_chn;
 	unsigned long flags;
-	s8 ret = ISP_SUCCESS;
 	u8 buf_chn;
 
 	if (!_is_be_post_online(ctx))
@@ -7077,54 +6600,51 @@ static void _vi_err_retrig_pre_fe(struct sop_vi_dev *vdev)
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!ctx->isp_pipe_enable[raw_num])
 			continue;
-
-		actual_raw = ctx->isp_bind_info[raw_num].bind_fe_num;
-		if (atomic_read(&vdev->isp_err_times[actual_raw]) > 30) {
+		if (atomic_read(&vdev->isp_err_times[raw_num]) > 30) {
 			vi_pr(VI_ERR, "raw_%d too much errors happened\n", raw_num);
 			continue;
 		}
 
-		vi_pr(VI_WARN, "fe_%d trig retry %d times\n", raw_num, atomic_read(&vdev->isp_err_times[actual_raw]));
+		vi_pr(VI_WARN, "fe_%d trig retry %d times\n", raw_num, atomic_read(&vdev->isp_err_times[raw_num]));
 
 		//yuv sensor offline2sc
 		if (ctx->isp_pipe_cfg[raw_num].is_yuv_sensor && ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
-			fe_max = ctx->isp_pipe_cfg[actual_raw].mux_mode;
+			fe_max = ctx->isp_pipe_cfg[raw_num].muxMode;
 			for (fe_chn = ISP_FE_CH0; fe_chn <= fe_max; fe_chn++) {
-				buf_chn = _isp_yuv_get_buf_chn(ctx, actual_raw, fe_chn);
-				if (atomic_read(&vdev->isp_err_times[actual_raw])) {
-					spin_lock_irqsave(&vdev->qbuf_lock[buf_chn], flags);
+				buf_chn = vdev->ctx.raw_chnstr_num[raw_num] + fe_chn;
+				if (atomic_read(&vdev->isp_err_times[raw_num])) {
+					spin_lock_irqsave(&vdev->qbuf_lock, flags);
 					vdev->qbuf_num[buf_chn]++;
-					spin_unlock_irqrestore(&vdev->qbuf_lock[buf_chn], flags);
+					spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 				}
 
-				if (sop_isp_rdy_buf_empty(vdev, buf_chn)) {
+				if (cvi_isp_rdy_buf_empty(vdev, buf_chn)) {
 					vi_pr(VI_INFO, "fe_%d chn_%d yuv bypass outbuf is empty\n", raw_num, buf_chn);
 				} else {
-					_isp_yuv_bypass_trigger(vdev, actual_raw, fe_chn);
+					_isp_yuv_bypass_trigger(vdev, raw_num, fe_chn);
 				}
 			}
 		} else { //rgb senosr or yuv sensor online2sc
 			fe_max = ctx->isp_pipe_cfg[raw_num].is_hdr_on
 				     ? ISP_FE_CH1
-				     : ctx->isp_pipe_cfg[raw_num].mux_mode;
+				     : ctx->isp_pipe_cfg[raw_num].muxMode;
 			for (fe_chn = ISP_FE_CH0; fe_chn <= fe_max; fe_chn++) {
-				ret |= _pre_hw_enque(vdev, raw_num, fe_chn);
+				_pre_hw_enque(vdev, raw_num, fe_chn);
 			}
 		}
 	}
-
-	if (ctx->is_tile && (ret == ISP_SUCCESS))
-		_splt_hw_enque(vdev, ISP_PRERAW0);
 }
 
-void _vi_err_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw err_raw_num)
+void _vi_err_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw err_raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num;
-	enum sop_isp_raw actual_raw;
-	enum sop_isp_fe_chn_num fe_chn;
+	enum cvi_isp_raw raw_num;
+	enum cvi_isp_fe_chn_num fe_chn;
 	int count = 10;
 	bool fe_idle, be_idle, post_idle;
+
+	//Stop pre/postraw trigger go
+	atomic_set(&vdev->isp_err_handle_flag, 1);
 
 	//step 1 : set frm vld = 0
 	isp_frm_err_handler(ctx, err_raw_num, 1);
@@ -7137,11 +6657,10 @@ void _vi_err_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw err_raw_num
 			for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 				if (!vdev->ctx.isp_pipe_enable[raw_num])
 					continue;
-				actual_raw = ctx->isp_bind_info[raw_num].bind_fe_num;
-				if (atomic_read(&vdev->isp_err_times[actual_raw]) && count < 5)
+				if (atomic_read(&vdev->isp_err_times[raw_num]) && count < 5)
 					continue;
 				for (fe_chn = ISP_FE_CH0; fe_chn < ISP_FE_CHN_MAX; fe_chn++) {
-					if (atomic_read(&vdev->pre_fe_state[actual_raw][fe_chn]) != ISP_STATE_IDLE) {
+					if (atomic_read(&vdev->pre_fe_state[raw_num][fe_chn]) != ISP_STATE_IDLE) {
 						fe_idle = false;
 						break;
 					}
@@ -7214,8 +6733,8 @@ void _vi_err_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw err_raw_num
 	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
 		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
-		actual_raw = ctx->isp_bind_info[raw_num].bind_fe_num;
-		if (isp_frm_err_handler(ctx, actual_raw, 3) < 0)
+
+		if (isp_frm_err_handler(ctx, raw_num, 3) < 0)
 			return;
 	}
 
@@ -7270,8 +6789,8 @@ void _vi_err_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw err_raw_num
 
 static int _vi_err_handler_thread(void *arg)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)arg;
-	enum sop_isp_raw err_raw_num;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)arg;
+	enum cvi_isp_raw err_raw_num;
 	enum E_VI_TH th_id = E_VI_TH_ERR_HANDLER;
 
 	while (1) {
@@ -7294,13 +6813,13 @@ static int _vi_err_handler_thread(void *arg)
 	return 0;
 }
 
-static inline void vi_err_wake_up_th(struct sop_vi_dev *vdev, enum sop_isp_raw err_raw)
+static inline void vi_err_wake_up_th(struct cvi_vi_dev *vdev, enum cvi_isp_raw err_raw)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_fe_chn_num fe_chn = ISP_FE_CH0;
-	enum sop_isp_fe_chn_num fe_max = ctx->isp_pipe_cfg[err_raw].is_hdr_on
+	enum cvi_isp_fe_chn_num fe_chn = ISP_FE_CH0;
+	enum cvi_isp_fe_chn_num fe_max = ctx->isp_pipe_cfg[err_raw].is_hdr_on
 					? ISP_FE_CH1
-					: ctx->isp_pipe_cfg[err_raw].mux_mode;
+					: ctx->isp_pipe_cfg[err_raw].muxMode;
 
 	//record err_num;
 	atomic_add(1, &vdev->isp_err_times[err_raw]);
@@ -7327,22 +6846,20 @@ static inline void vi_err_wake_up_th(struct sop_vi_dev *vdev, enum sop_isp_raw e
 }
 
 u32 isp_err_chk(
-	struct sop_vi_dev *vdev,
+	struct cvi_vi_dev *vdev,
 	struct isp_ctx *ctx,
-	union reg_isp_csi_bdg_interrupt_status_0 *cbdg_0_sts,
-	union reg_isp_csi_bdg_interrupt_status_1 *cbdg_1_sts)
+	union REG_ISP_CSI_BDG_INTERRUPT_STATUS_0 *cbdg_0_sts,
+	union REG_ISP_CSI_BDG_INTERRUPT_STATUS_1 *cbdg_1_sts)
 {
 	u32 ret = 0;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
-	enum sop_isp_fe_chn_num fe_chn = ISP_FE_CH0;
-	int i;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_fe_chn_num fe_chn = ISP_FE_CH0;
 
-	for (i = ISP_PRERAW0; i < ISP_PRERAW_MAX; i++) {
-		if (!vdev->ctx.isp_pipe_enable[i])
+	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
 
-		raw_num = ctx->isp_bind_info[i].bind_fe_num;
-		if (cbdg_1_sts[raw_num].bits.fifo_overflow_int) {
+		if (cbdg_1_sts[raw_num].bits.FIFO_OVERFLOW_INT) {
 			vi_pr(VI_ERR, "CSIBDG_%d fifo overflow\n", raw_num);
 			_vi_record_debug_info(ctx);
 			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_fifo_of_cnt++;
@@ -7350,12 +6867,12 @@ u32 isp_err_chk(
 			ret = -1;
 		}
 
-		if (cbdg_1_sts[raw_num].bits.frame_resolution_over_max_int) {
+		if (cbdg_1_sts[raw_num].bits.FRAME_RESOLUTION_OVER_MAX_INT) {
 			vi_pr(VI_ERR, "CSIBDG_%d frm size over max\n", raw_num);
 			ret = -1;
 		}
 
-		if (cbdg_1_sts[raw_num].bits.dma_error_int) {
+		if (cbdg_1_sts[raw_num].bits.DMA_ERROR_INT) {
 			u32 wdma_0_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_0_err_sts;
 			u32 wdma_1_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_1_err_sts;
 			u32 wdma_2_err = ctx->isp_pipe_cfg[raw_num].dg_info.dma_sts.wdma_2_err_sts;
@@ -7381,7 +6898,7 @@ u32 isp_err_chk(
 				ret = -1;
 			} else if ((wdma_0_err & 0x40) || (wdma_1_err & 0x40) ||
 				(wdma_2_err & 0x40) || (wdma_3_err & 0x40)) {
-				vi_pr(VI_WARN, "CSIBDG_%d WDMA buffer full\n", raw_num);
+				vi_pr(VI_WARN, "WDMA buffer full\n");
 			}
 
 			vi_pr(VI_WARN, "Err status wdma[0(0x%x) 1(0x%x) 2(0x%x) 3(0x%x)] rdma[0(0x%x) 1(0x%x)]\n",
@@ -7392,7 +6909,7 @@ u32 isp_err_chk(
 
 		fe_chn = ISP_FE_CH0;
 
-		if (cbdg_0_sts[raw_num].bits.ch0_frame_width_gt_int) {
+		if (cbdg_0_sts[raw_num].bits.CH0_FRAME_WIDTH_GT_INT) {
 			vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width greater than setting(%d)\n",
 					raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_gt_cnt[fe_chn]++;
@@ -7400,7 +6917,7 @@ u32 isp_err_chk(
 			ret = -1;
 		}
 
-		if (cbdg_0_sts[raw_num].bits.ch0_frame_width_ls_int) {
+		if (cbdg_0_sts[raw_num].bits.CH0_FRAME_WIDTH_LS_INT) {
 			vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width less than setting(%d)\n",
 					raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_ls_cnt[fe_chn]++;
@@ -7408,7 +6925,7 @@ u32 isp_err_chk(
 			ret = -1;
 		}
 
-		if (cbdg_0_sts[raw_num].bits.ch0_frame_height_gt_int) {
+		if (cbdg_0_sts[raw_num].bits.CH0_FRAME_HEIGHT_GT_INT) {
 			vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height greater than setting(%d)\n",
 					raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_gt_cnt[fe_chn]++;
@@ -7416,7 +6933,7 @@ u32 isp_err_chk(
 			ret = -1;
 		}
 
-		if (cbdg_0_sts[raw_num].bits.ch0_frame_height_ls_int) {
+		if (cbdg_0_sts[raw_num].bits.CH0_FRAME_HEIGHT_LS_INT) {
 			vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height less than setting(%d)\n",
 					raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_ls_cnt[fe_chn]++;
@@ -7425,10 +6942,10 @@ u32 isp_err_chk(
 		}
 
 		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on ||
-		    ctx->isp_pipe_cfg[raw_num].mux_mode > VI_WORK_MODE_1MULTIPLEX) {
+		    ctx->isp_pipe_cfg[raw_num].muxMode > VI_WORK_MODE_1Multiplex) {
 			fe_chn = ISP_FE_CH1;
 
-			if (cbdg_0_sts[raw_num].bits.ch1_frame_width_gt_int) {
+			if (cbdg_0_sts[raw_num].bits.CH1_FRAME_WIDTH_GT_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width greater than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_gt_cnt[fe_chn]++;
@@ -7436,7 +6953,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch1_frame_width_ls_int) {
+			if (cbdg_0_sts[raw_num].bits.CH1_FRAME_WIDTH_LS_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width less than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_ls_cnt[fe_chn]++;
@@ -7444,7 +6961,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch1_frame_height_gt_int) {
+			if (cbdg_0_sts[raw_num].bits.CH1_FRAME_HEIGHT_GT_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height greater than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_gt_cnt[fe_chn]++;
@@ -7452,7 +6969,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch1_frame_height_ls_int) {
+			if (cbdg_0_sts[raw_num].bits.CH1_FRAME_HEIGHT_LS_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height less than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_ls_cnt[fe_chn]++;
@@ -7461,10 +6978,10 @@ u32 isp_err_chk(
 			}
 		}
 
-		if (ctx->isp_pipe_cfg[raw_num].mux_mode > VI_WORK_MODE_2MULTIPLEX) {
+		if (ctx->isp_pipe_cfg[raw_num].muxMode > VI_WORK_MODE_2Multiplex) {
 			fe_chn = ISP_FE_CH2;
 
-			if (cbdg_0_sts[raw_num].bits.ch2_frame_width_gt_int) {
+			if (cbdg_0_sts[raw_num].bits.CH2_FRAME_WIDTH_GT_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width greater than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_gt_cnt[fe_chn]++;
@@ -7472,7 +6989,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch2_frame_width_ls_int) {
+			if (cbdg_0_sts[raw_num].bits.CH2_FRAME_WIDTH_LS_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width less than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_ls_cnt[fe_chn]++;
@@ -7480,7 +6997,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch2_frame_height_gt_int) {
+			if (cbdg_0_sts[raw_num].bits.CH2_FRAME_HEIGHT_GT_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height greater than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_gt_cnt[fe_chn]++;
@@ -7488,7 +7005,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch2_frame_height_ls_int) {
+			if (cbdg_0_sts[raw_num].bits.CH2_FRAME_HEIGHT_LS_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height less than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_ls_cnt[fe_chn]++;
@@ -7497,10 +7014,10 @@ u32 isp_err_chk(
 			}
 		}
 
-		if (ctx->isp_pipe_cfg[raw_num].mux_mode > VI_WORK_MODE_3MULTIPLEX) {
+		if (ctx->isp_pipe_cfg[raw_num].muxMode > VI_WORK_MODE_3Multiplex) {
 			fe_chn = ISP_FE_CH3;
 
-			if (cbdg_0_sts[raw_num].bits.ch3_frame_width_gt_int) {
+			if (cbdg_0_sts[raw_num].bits.CH3_FRAME_WIDTH_GT_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width greater than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_gt_cnt[fe_chn]++;
@@ -7508,7 +7025,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch3_frame_width_ls_int) {
+			if (cbdg_0_sts[raw_num].bits.CH3_FRAME_WIDTH_LS_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm width less than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_width);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_w_ls_cnt[fe_chn]++;
@@ -7516,7 +7033,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch3_frame_height_gt_int) {
+			if (cbdg_0_sts[raw_num].bits.CH3_FRAME_HEIGHT_GT_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height greater than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_gt_cnt[fe_chn]++;
@@ -7524,7 +7041,7 @@ u32 isp_err_chk(
 				ret = -1;
 			}
 
-			if (cbdg_0_sts[raw_num].bits.ch3_frame_height_ls_int) {
+			if (cbdg_0_sts[raw_num].bits.CH3_FRAME_HEIGHT_LS_INT) {
 				vi_pr(VI_ERR, "CSIBDG_%d CH%d frm height less than setting(%d)\n",
 						raw_num, fe_chn, ctx->isp_pipe_cfg[raw_num].csibdg_height);
 				ctx->isp_pipe_cfg[raw_num].dg_info.bdg_h_ls_cnt[fe_chn]++;
@@ -7539,15 +7056,15 @@ u32 isp_err_chk(
 
 void isp_post_tasklet(unsigned long data)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)data;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)data;
 
 	_post_hw_enque(vdev);
 }
 
 static int _vi_preraw_thread(void *arg)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)arg;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)arg;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 	struct isp_ctx *ctx = &vdev->ctx;
 
 	struct list_head *pos, *temp;
@@ -7576,7 +7093,6 @@ static int _vi_preraw_thread(void *arg)
 
 		for (i = 0; i < enq_num; i++) {
 			raw_num = n[i]->raw_num;
-
 			spin_lock_irqsave(&raw_num_lock, flags);
 			list_del_init(&n[i]->list);
 			kfree(n[i]);
@@ -7601,8 +7117,9 @@ static int _vi_preraw_thread(void *arg)
 					pre_be_tuning_update(&vdev->ctx, raw_num);
 
 					//on the fly or slice buffer mode on
-					if (_is_all_online(ctx) || ctx->is_slice_buf_on)
+					if (_is_all_online(ctx) || ctx->is_slice_buf_on) {
 						postraw_tuning_update(&vdev->ctx, raw_num);
+					}
 				}
 			}
 
@@ -7620,10 +7137,8 @@ static int _vi_preraw_thread(void *arg)
 					++vdev->drop_frame_number[raw_num];
 				else {
 					vi_pr(VI_DBG, "raw_%d stop drop\n", raw_num);
-					/*
 					ctx->isp_pipe_cfg[raw_num].isp_reset_frm =
 						vdev->pre_fe_frm_num[raw_num][ISP_FE_CH0] + 1;
-					*/
 					_clear_drop_frm_info(vdev, raw_num);
 				}
 
@@ -7631,19 +7146,11 @@ static int _vi_preraw_thread(void *arg)
 				if (_is_all_online(ctx) && !ctx->isp_pipe_cfg[raw_num].is_offline_scaler)
 					continue;
 
-				//TODO raw_num maybe not RAW_)
 				if (!ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe &&
-				    !ctx->isp_pipe_cfg[raw_num].is_raw_replay_be) {
-					isp_trig_whole_preraw(vdev, raw_num);
-				}
-
-				if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_SPLT) {
-					enum isp_blk_id_t blk_id = (raw_num == ISP_PRERAW0)
-									? ISP_BLK_ID_SPLT_FE0_WDMA
-									: ISP_BLK_ID_SPLT_FE1_WDMA;
-
-					ispblk_splt_wdma_ctrl_config(ctx, blk_id, true);
-					_splt_hw_enque(vdev, raw_num);
+					!ctx->isp_pipe_cfg[raw_num].is_raw_replay_be) {
+					_pre_hw_enque(vdev, raw_num, ISP_FE_CH0);
+					if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
+						_pre_hw_enque(vdev, raw_num, ISP_FE_CH1);
 				}
 			}
 		}
@@ -7656,8 +7163,8 @@ static int _vi_preraw_thread(void *arg)
 
 static int _vi_vblank_handler_thread(void *arg)
 {
-	struct sop_vi_dev *vdev = (struct sop_vi_dev *)arg;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
+	struct cvi_vi_dev *vdev = (struct cvi_vi_dev *)arg;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
 
 	enum E_VI_TH th_id = E_VI_TH_VBLANK_HANDLER;
 
@@ -7678,7 +7185,7 @@ static int _vi_vblank_handler_thread(void *arg)
 	return 0;
 }
 
-static void _isp_yuv_online_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num, const u8 hw_chn_num)
+static void _isp_yuv_online_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num, const u8 hw_chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct isp_buffer *b = NULL;
@@ -7705,50 +7212,42 @@ static void _isp_yuv_online_handler(struct sop_vi_dev *vdev, const enum sop_isp_
 
 	// if preraw offline, let usr_pic_timer_handler do it.
 	if (!ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe &&
-	    !ctx->isp_pipe_cfg[raw_num].is_raw_replay_be &&
-	     ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap != RAW_AI_ISP_SPLT)
+		!ctx->isp_pipe_cfg[raw_num].is_raw_replay_be)
 		_pre_hw_enque(vdev, raw_num, hw_chn_num);
 }
 
-static void _isp_yuv_bypass_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num, const u8 hw_chn_num)
+static void _isp_yuv_bypass_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num, const u8 hw_chn_num)
 {
-	struct isp_ctx *ctx = &vdev->ctx;
-	u8 buf_chn = _isp_yuv_get_buf_chn(ctx, raw_num, hw_chn_num);
+	u8 buf_chn = vdev->ctx.raw_chnstr_num[raw_num] + hw_chn_num;
 
 	atomic_set(&vdev->pre_fe_state[raw_num][hw_chn_num], ISP_STATE_IDLE);
 
-	if (!atomic_read(&vdev->is_streaming[buf_chn]))
-		return;
+	cvi_isp_dqbuf_list(vdev, vdev->pre_fe_frm_num[raw_num][hw_chn_num], buf_chn);
 
-	sop_isp_dqbuf_list(vdev, vdev->pre_fe_frm_num[raw_num][hw_chn_num], buf_chn);
+	++vdev->postraw_frame_number[raw_num];
 
-	++vdev->postraw_frame_number[buf_chn];
-
-	vdev->vi_th[E_VI_TH_EVENT_HANDLER].flag = buf_chn + 1;
+	vdev->vi_th[E_VI_TH_EVENT_HANDLER].flag = raw_num + 1;
 	wake_up(&vdev->vi_th[E_VI_TH_EVENT_HANDLER].wq);
 
-	if (sop_isp_rdy_buf_empty(vdev, buf_chn)) {
-		atomic_set(&vdev->out_buf_empty[buf_chn], 1);
-		vi_pr(VI_INFO, "pipe_%d fe_%d chn_num_%d yuv bypass outbuf is empty\n",
-		      buf_chn, raw_num, hw_chn_num);
-	} else
+	if (cvi_isp_rdy_buf_empty(vdev, buf_chn))
+		vi_pr(VI_INFO, "fe_%d chn_num_%d yuv bypass outbuf is empty\n", raw_num, buf_chn);
+	else
 		_isp_yuv_bypass_trigger(vdev, raw_num, hw_chn_num);
 }
 
-static inline void _vi_wake_up_vblank_th(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static inline void _vi_wake_up_vblank_th(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	vdev->vi_th[E_VI_TH_VBLANK_HANDLER].flag = raw_num + 1;
 	wake_up(&vdev->vi_th[E_VI_TH_VBLANK_HANDLER].wq);
 }
 
-static void _isp_sof_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw raw_num)
+static void _isp_sof_handler(struct cvi_vi_dev *vdev, const enum cvi_isp_raw raw_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
+	// struct _isp_dqbuf_n *n = NULL;
+	// unsigned long flags;
 
 	if (atomic_read(&vdev->isp_streamoff) == 1)
-		return;
-
-	if (_is_right_tile(ctx, raw_num))
 		return;
 
 	if (!(_is_fe_be_online(ctx) && ctx->is_slice_buf_on) || ctx->isp_pipe_cfg[raw_num].is_drop_next_frame)
@@ -7759,74 +7258,111 @@ static void _isp_sof_handler(struct sop_vi_dev *vdev, const enum sop_isp_raw raw
 
 	tasklet_hi_schedule(&vdev->job_work);
 
+	// if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
+	// 	spin_lock_irqsave(&dq_lock, flags);
+	// 	if (!list_empty(&dqbuf_q[raw_num].list)) {
+	// 		n = list_first_entry(&dqbuf_q[raw_num].list, struct _isp_dqbuf_n, list);
+	// 		vdev->vi_th[E_VI_TH_EVENT_HANDLER].flag = n->chn_id + 1;
+	// 		wake_up(&vdev->vi_th[E_VI_TH_EVENT_HANDLER].wq);
+	// 	}
+	// 	spin_unlock_irqrestore(&dq_lock, flags);
+	// }
+
 	isp_sync_task_process(raw_num);
 }
 
 static inline void _isp_splt_wdma_done_handler(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw hw_raw_num,
-	const enum sop_isp_fe_chn_num chn_num)
-{
-	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = hw_raw_num;
-	bool trigger = false;
-
-	/*only splt_ai_isp need splt_wdma*/
-	if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap != RAW_AI_ISP_SPLT)
-		return;
-
-	vi_pr(VI_DBG, "splt_wdma_%d frm_done chn_num=%d frm_num=%d\n",
-			raw_num, chn_num, vdev->splt_wdma_frm_num[raw_num][chn_num]);
-
-	atomic_set(&vdev->splt_state[raw_num][chn_num], ISP_STATE_IDLE);
-
-	if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
-		trigger = vdev->splt_wdma_frm_num[raw_num][ISP_FE_CH0] ==
-				vdev->splt_wdma_frm_num[raw_num][ISP_FE_CH1];
-	} else {
-		trigger = true;
-	}
-
-	if (trigger) {
-		if (ctx->isp_pipe_cfg[raw_num].is_fake_splt_wdma) {
-			// fake_splt_wdma will not run tpu
-			_pre_hw_enque(vdev, raw_num, ISP_FE_CH0);
-			if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
-				_pre_hw_enque(vdev, raw_num, ISP_FE_CH1);
-		} else {
-			if (ddr_need_retrain(vdev)) {
-				_splt_hw_enque(vdev, raw_num);
-			} else {
-				// go to splt_ai_isp process
-				_vi_wake_up_tpu_th(vdev, raw_num, AI_ISP_TYPE_BNR);
-				_vi_wake_up_vblank_th(vdev, raw_num);
-			}
-		}
-	}
-}
-
-static inline void _isp_splt_rdma_done_handler(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw hw_raw_num,
-	const enum sop_isp_fe_chn_num chn_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw hw_raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct isp_queue *splt_w_q = NULL;
 	struct isp_queue *splt_r_q = NULL;
 	struct isp_buffer *b = NULL;
-	enum isp_blk_id_t splt_rdma_id = 0;
-	enum sop_isp_raw raw_num = hw_raw_num;
+	enum cvi_isp_raw raw_num = hw_raw_num;
+	bool trigger = false;
+
+	vi_pr(VI_DBG, "splt_wdma_%d frm_done chn_num=%d frm_num=%d\n",
+			raw_num, chn_num, vdev->splt_wdma_frm_num[raw_num][chn_num]);
+
+	//raw ai isp move to FE, abandon splt flow
+	return;
+
+	atomic_set(&vdev->splt_state[raw_num][chn_num], ISP_STATE_IDLE);
+
+	if (ctx->isp_pipe_cfg[raw_num].is_tile) {
+		raw_num = ISP_PRERAW0;
+		trigger = (vdev->splt_wdma_frm_num[raw_num][chn_num] ==
+				vdev->splt_wdma_frm_num[raw_num + 1][chn_num]);
+	} else {
+		trigger = true;
+	}
+
+	if (trigger) {
+		splt_w_q = &splt_out_q[raw_num][chn_num];
+		splt_r_q = &pre_fe_in_q[raw_num][chn_num];
+
+		if (!ctx->isp_pipe_cfg[raw_num].is_fake_splt_wdma) {
+			b = isp_buf_remove(splt_w_q);
+			if (b == NULL) {
+				vi_pr(VI_ERR, "splt_wdma_%d chn_num_%d outbuf is empty\n",
+						raw_num, chn_num);
+				return;
+			}
+
+			// TODO transfer frame to TPU
+			// This is for test.
+			isp_buf_queue(splt_r_q, b);
+		}
+
+		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
+			trigger = vdev->splt_wdma_frm_num[raw_num][ISP_FE_CH0] ==
+					vdev->splt_wdma_frm_num[raw_num][ISP_FE_CH1];
+		}
+
+		if (trigger) {
+			_pre_hw_enque(vdev, raw_num, ISP_FE_CH0);
+			if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
+				_pre_hw_enque(vdev, raw_num, ISP_FE_CH1);
+
+			if (ctx->isp_pipe_cfg[raw_num].is_tile) {
+				_pre_hw_enque(vdev, raw_num + 1, ISP_FE_CH0);
+				if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
+					_pre_hw_enque(vdev, raw_num + 1, ISP_FE_CH1);
+			}
+		}
+
+		_splt_hw_enque(vdev, raw_num);
+	}
+}
+
+static inline void _isp_splt_rdma_done_handler(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw hw_raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
+{
+	struct isp_ctx *ctx = &vdev->ctx;
+	struct isp_queue *splt_w_q = NULL;
+	struct isp_queue *splt_r_q = NULL;
+	struct isp_buffer *b = NULL;
+	enum ISP_BLK_ID_T splt_rdma_id = 0;
+	enum cvi_isp_raw raw_num = hw_raw_num;
 	bool trigger = false;
 
 	vi_pr(VI_DBG, "splt_rdma_%d frm_done chn_num=%d frm_num=%d\n",
 			raw_num, chn_num, vdev->splt_rdma_frm_num[raw_num][chn_num]);
 
+	//raw ai isp move to FE, abandon splt flow
+	return;
+
 	if (ctx->isp_pipe_cfg[raw_num].is_tile) {
 		raw_num = ISP_PRERAW0;
 		trigger = (vdev->splt_rdma_frm_num[raw_num][chn_num] ==
 				vdev->splt_rdma_frm_num[raw_num + 1][chn_num]);
-	} else
+	} else {
 		trigger = true;
+	}
 
 	if (trigger) {
 		splt_w_q = &splt_out_q[raw_num][chn_num];
@@ -7834,51 +7370,48 @@ static inline void _isp_splt_rdma_done_handler(
 
 		b = isp_buf_remove(splt_r_q);
 		if (b == NULL) {
-			vi_pr(VI_INFO, "splt_rdma_%d chn_num_%d outbuf is empty\n", raw_num, chn_num);
+			vi_pr(VI_ERR, "splt_rdma_%d chn_num_%d outbuf is empty\n",
+					raw_num, chn_num);
 			return;
 		}
+
 		isp_buf_queue(splt_w_q, b);
 
 		splt_rdma_id = (chn_num == ISP_FE_CH0) ?
 				ISP_BLK_ID_SPLT_FE0_RDMA_LE : ISP_BLK_ID_SPLT_FE0_RDMA_SE;
-
-		//ispblk_splt_rdma_ctrl_config(ctx, splt_rdma_id, false);
-		//if (ctx->isp_pipe_cfg[raw_num].is_tile) {
-		//	splt_rdma_id = (chn_num == ISP_FE_CH0) ?
-		//			ISP_BLK_ID_SPLT_FE1_RDMA_LE : ISP_BLK_ID_SPLT_FE1_RDMA_SE;
-		//	ispblk_splt_rdma_ctrl_config(ctx, splt_rdma_id, false);
-		//}
+		ispblk_splt_rdma_ctrl_config(ctx, splt_rdma_id, false);
+		if (ctx->isp_pipe_cfg[raw_num].is_tile) {
+			splt_rdma_id = (chn_num == ISP_FE_CH0) ?
+					ISP_BLK_ID_SPLT_FE1_RDMA_LE : ISP_BLK_ID_SPLT_FE1_RDMA_SE;
+			ispblk_splt_rdma_ctrl_config(ctx, splt_rdma_id, false);
+		}
 	}
 }
 
 static inline void _isp_pre_fe_done_handler(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw hw_raw_num,
-	const enum sop_isp_fe_chn_num chn_num)
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw hw_raw_num,
+	const enum cvi_isp_fe_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = hw_raw_num;
-	u8 buf_chn = _isp_yuv_get_buf_chn(ctx, raw_num, chn_num);
+	enum cvi_isp_raw raw_num = hw_raw_num;
 	bool trigger = false;
-	s8 ret = ISP_SUCCESS;
 
 	//reset error times when fe_done
 	if (unlikely(atomic_read(&vdev->isp_err_times[raw_num]))) {
 		atomic_set(&vdev->isp_err_times[raw_num], 0);
 	}
 
-	vi_pr(VI_DBG, "pipe_%d is_yuv[%d], pre_fe_%d chn_num=%d frm_num=%d\n",
-	      buf_chn, ctx->isp_pipe_cfg[buf_chn].is_yuv_sensor,
-	      raw_num, chn_num, vdev->pre_fe_frm_num[raw_num][chn_num]);
-
-	if (ctx->isp_pipe_cfg[buf_chn].is_yuv_sensor) {
-		if (ctx->isp_pipe_cfg[buf_chn].yuv_scene_mode == ISP_YUV_SCENE_BYPASS) {
+	if (ctx->isp_pipe_cfg[raw_num].is_yuv_sensor) {
+		if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_BYPASS) {
+			vi_pr(VI_DBG, "pre_fe_%d yuv bypass done chn_num=%d frm_num=%d\n",
+					raw_num, chn_num, vdev->pre_fe_frm_num[raw_num][chn_num]);
 			_isp_yuv_bypass_handler(vdev, raw_num, chn_num);
-		} else if (ctx->isp_pipe_cfg[buf_chn].yuv_scene_mode == ISP_YUV_SCENE_ONLINE) {
+		} else if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_ONLINE) {
 			vi_pr(VI_DBG, "pre_fe_%d yuv online done chn_num=%d frm_num=%d\n",
 					raw_num, chn_num, vdev->pre_fe_frm_num[raw_num][chn_num]);
 			_isp_yuv_online_handler(vdev, raw_num, chn_num);
-		} else if (ctx->isp_pipe_cfg[buf_chn].yuv_scene_mode == ISP_YUV_SCENE_ISP) {
+		} else if (ctx->isp_pipe_cfg[raw_num].yuv_scene_mode == ISP_YUV_SCENE_ISP) {
 			vi_pr(VI_DBG, "pre_fe_%d yuv isp done chn_num=%d frm_num=%d\n",
 					raw_num, chn_num, vdev->pre_fe_frm_num[raw_num][chn_num]);
 			_isp_yuv_online_handler(vdev, raw_num, chn_num);
@@ -7975,8 +7508,9 @@ static inline void _isp_pre_fe_done_handler(
 			} else
 				trigger = true;
 
-			if (trigger)
+			if (trigger) {
 				_isp_raw_dump_chk(vdev, raw_num, b->frm_num);
+			}
 		}
 
 		atomic_set(&vdev->pre_fe_state[raw_num][chn_num], ISP_STATE_IDLE);
@@ -7996,7 +7530,6 @@ static inline void _isp_pre_fe_done_handler(
 		struct isp_buffer *b = NULL;
 		struct isp_grid_s_info m_info;
 		struct isp_queue *fe_out_q, *be_in_q, *raw_d_q;
-		bool fe_ai_isp = ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap == RAW_AI_ISP_FE ? 1 : 0;
 
 		if (_postraw_outbuf_empty(vdev, raw_num) ||
 			!atomic_read(&vdev->is_streaming[raw_num])) {
@@ -8007,11 +7540,11 @@ static inline void _isp_pre_fe_done_handler(
 		}
 
 		fe_out_q = &pre_fe_out_q[raw_num][chn_num];
-		if (fe_ai_isp)
+		if (ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 			be_in_q = &bnr_ai_isp_q[raw_num][chn_num];
-		else
+		} else {
 			be_in_q = (chn_num == ISP_FE_CH0) ? &pre_be_in_q : &pre_be_in_se_q[raw_num];
-
+		}
 		raw_d_q = (chn_num == ISP_FE_CH0) ?
 				&raw_dump_b_dq[raw_num] : &raw_dump_b_se_dq[raw_num];
 
@@ -8024,36 +7557,40 @@ static inline void _isp_pre_fe_done_handler(
 			return;
 		}
 
-		m_info = ispblk_rgbmap_info(ctx, raw_num);
-		b->rgbmap_i.w_bit = m_info.w_bit;
-		b->rgbmap_i.h_bit = m_info.h_bit;
-		m_info = ispblk_lmap_info(ctx, raw_num);
-		b->lmap_i.w_bit = m_info.w_bit;
-		b->lmap_i.h_bit = m_info.h_bit;
-		b->chn_num = chn_num;
-		b->timestamp = ktime_to_timespec64(ktime_get());
-
 		if (atomic_read(&vdev->isp_raw_dump_en[raw_num]) == 3) { //raw dump enable
-			u32 w = ctx->isp_pipe_cfg[raw_num].crop.w;
-			u32 h = ctx->isp_pipe_cfg[raw_num].crop.h;
+			u32 w = (chn_num == ISP_FE_CH0) ?
+				ctx->isp_pipe_cfg[raw_num].crop.w :
+				ctx->isp_pipe_cfg[raw_num].crop_se.w;
+			u32 h = (chn_num == ISP_FE_CH0) ?
+				ctx->isp_pipe_cfg[raw_num].crop.h :
+				ctx->isp_pipe_cfg[raw_num].crop_se.h;
 			u32 dmaid = csibdg_dma_find_hwid(raw_num, chn_num);
 
 			if (chn_num == ISP_FE_CH0)
 				++vdev->dump_frame_number[raw_num];
 
-			if (ctx->isp_pipe_cfg[raw_num].is_tile)
-				w += ctx->isp_pipe_cfg[raw_num + 1].crop.w;
-
 			b->crop_le.x = b->crop_se.x = 0;
 			b->crop_le.y = b->crop_se.y = 0;
-			b->crop_le.w = b->crop_se.w = w;
-			b->crop_le.h = b->crop_se.h = h;
+			b->crop_le.w = b->crop_se.w = ctx->isp_pipe_cfg[raw_num].crop.w;
+			b->crop_le.h = b->crop_se.h = ctx->isp_pipe_cfg[raw_num].crop.h;
 			b->byr_size = ispblk_dma_get_size(ctx, dmaid, w, h);
 			b->frm_num = vdev->pre_fe_frm_num[raw_num][chn_num];
+
 			isp_buf_queue(raw_d_q, b);
 		} else {
+			m_info = ispblk_rgbmap_info(ctx, raw_num);
+			b->rgbmap_i.w_bit = m_info.w_bit;
+			b->rgbmap_i.h_bit = m_info.h_bit;
+
+			m_info = ispblk_lmap_info(ctx, raw_num);
+			b->lmap_i.w_bit = m_info.w_bit;
+			b->lmap_i.h_bit = m_info.h_bit;
+
+			b->chn_num	= 0;
+
 			isp_buf_queue(be_in_q, b);
 		}
+
 
 		atomic_set(&vdev->pre_fe_state[hw_raw_num][chn_num], ISP_STATE_IDLE);
 
@@ -8068,38 +7605,38 @@ static inline void _isp_pre_fe_done_handler(
 
 			if (atomic_read(&vdev->isp_raw_dump_en[raw_num]) == 3) { //raw dump flow
 				_isp_raw_dump_chk(vdev, raw_num, b->frm_num);
-				if (fe_ai_isp)
+				if (ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 					_pre_hw_enque(vdev, raw_num, chn_num);
+				}
 			} else {
-				if (fe_ai_isp)
+				if (ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
 					_vi_wake_up_tpu_th(vdev, raw_num, AI_ISP_TYPE_BNR);
-				else
+				} else {
 					tasklet_hi_schedule(&vdev->job_work);
-
-				if (ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap != RAW_AI_ISP_SPLT)
-					_vi_wake_up_vblank_th(vdev, raw_num);
+				}
+				_vi_wake_up_vblank_th(vdev, raw_num);
 			}
 		}
 
 		if (!ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe &&
 			!ctx->isp_pipe_cfg[raw_num].is_raw_replay_be &&
-			!ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap) {
-			ret = _pre_hw_enque(vdev, raw_num, chn_num);
-			if (ctx->isp_pipe_cfg[raw_num].is_tile || line_spliter_en) {
-				ret |= _pre_hw_enque(vdev, raw_num + 1, chn_num);
+			!ctx->isp_pipe_cfg[raw_num].is_raw_ai_isp) {
+			_pre_hw_enque(vdev, raw_num, chn_num);
+			if (ctx->isp_pipe_cfg[raw_num].is_tile)
+				_pre_hw_enque(vdev, raw_num + 1, chn_num);
 
-				if (ddr_need_retrain(vdev) || ret == ISP_SUCCESS)
-					_splt_hw_enque(vdev, raw_num);
-			}
+			if (ctx->isp_pipe_cfg[raw_num].is_tile || line_spliter_en)
+				_splt_hw_enque(vdev, raw_num);
 		}
 	}
 }
 
-static inline void _isp_pre_be_done_handler(struct sop_vi_dev *vdev,
-					    const enum sop_isp_be_chn_num chn_num)
+static inline void _isp_pre_be_done_handler(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_be_chn_num chn_num)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = vi_get_first_raw_num(ctx);
+	enum cvi_isp_raw raw_num = vi_get_first_raw_num(ctx);
 	bool trigger = false;
 
 	if (_is_fe_be_online(ctx) && !ctx->is_slice_buf_on) { // fe->be->dram->post
@@ -8126,7 +7663,6 @@ static inline void _isp_pre_be_done_handler(struct sop_vi_dev *vdev,
 		m_info = ispblk_lmap_info(ctx, raw_num);
 		b->lmap_i.w_bit = m_info.w_bit;
 		b->lmap_i.h_bit = m_info.h_bit;
-		b->timestamp = ktime_to_timespec64(ktime_get());
 
 		isp_buf_queue(post_in_q, b);
 
@@ -8200,46 +7736,11 @@ static inline void _isp_pre_be_done_handler(struct sop_vi_dev *vdev,
 
 		if (trigger)
 			vi_event_queue(vdev, VI_EVENT_PRE0_EOF + vi_get_dev_num_by_raw(ctx, raw_num),
-					vdev->pre_be_frm_num[raw_num][ISP_BE_CH0]);
-	} else if (_is_all_online(ctx)) { // fly-mode
-		++vdev->pre_be_frm_num[raw_num][chn_num];
-
-		vi_pr(VI_DBG, "pre_be_%d frm_done chn_num=%d frm_num=%d\n",
-				raw_num, chn_num, vdev->pre_be_frm_num[raw_num][chn_num]);
-
-		//Pre_be done for tuning to get stt.
-		_swap_pre_be_sts_buf(vdev, raw_num, chn_num);
-
-		vi_event_queue(vdev, VI_EVENT_PRE0_EOF + vi_get_dev_num_by_raw(ctx, raw_num),
 				vdev->pre_be_frm_num[raw_num][ISP_BE_CH0]);
-	} else if (_is_fe_be_online(ctx) && ctx->is_slice_buf_on) { // fe->be->dram->post
-		++vdev->pre_be_frm_num[raw_num][chn_num];
-
-		vi_pr(VI_DBG, "pre_be_%d frm_done chn_num=%d frm_num=%d\n",
-				raw_num, chn_num, vdev->pre_be_frm_num[raw_num][chn_num]);
-
-		//Pre_be done for tuning to get stt.
-		_swap_pre_be_sts_buf(vdev, raw_num, chn_num);
-
-		atomic_set(&vdev->pre_be_state[chn_num], ISP_STATE_IDLE);
-
-		if (ctx->isp_pipe_cfg[raw_num].is_hdr_on) {
-			trigger = (vdev->pre_be_frm_num[raw_num][ISP_BE_CH0] ==
-					vdev->pre_be_frm_num[raw_num][ISP_BE_CH1]);
-		} else
-			trigger = true;
-
-		if (trigger) {
-			tasklet_hi_schedule(&vdev->job_work);
-			_vi_wake_up_vblank_th(vdev, raw_num);
-
-			vi_event_queue(vdev, VI_EVENT_PRE0_EOF + vi_get_dev_num_by_raw(ctx, raw_num),
-					vdev->pre_be_frm_num[raw_num][ISP_BE_CH0]);
-		}
 	}
 }
 
-static void _isp_postraw_shaw_done_handler(struct sop_vi_dev *vdev)
+static void _isp_postraw_shaw_done_handler(struct cvi_vi_dev *vdev)
 {
 	if (_is_fe_be_online(&vdev->ctx) && vdev->ctx.is_slice_buf_on) {
 		vi_pr(VI_INFO, "postraw shaw done\n");
@@ -8247,30 +7748,30 @@ static void _isp_postraw_shaw_done_handler(struct sop_vi_dev *vdev)
 	}
 }
 
-static void _isp_postraw_done_handler(struct sop_vi_dev *vdev)
+static void _isp_postraw_done_handler(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	enum sop_isp_raw raw_num = ISP_PRERAW0;
-	enum sop_isp_fe_chn_num chn_num = ISP_FE_CH0;
+	enum cvi_isp_raw raw_num = ISP_PRERAW0;
+	enum cvi_isp_fe_chn_num chn_num = ISP_FE_CH0;
 
 	if (vdev->postraw_proc_num % 2 == 0) {
 		vdev->postraw_proc_num = 0;
 		ctx->is_work_on_r_tile = false;
 	} else {
-		//TODO for tile, maybe enable fbc
 		atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
 		if (_is_be_post_online(ctx) && ctx->isp_pipe_cfg[raw_num].is_yuv_sensor)
 			atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_STATE_IDLE);
 
-		vi_pr(VI_DBG, "Postraw_%d left tile frm_done\n", raw_num);
-
-		if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler)
-			tasklet_hi_schedule(&vdev->job_work);
+		vi_pr(VI_DBG, "Postraw_%d left tile frm_done frm_num=%d\n",
+			raw_num, vdev->postraw_frame_number[raw_num]);
+		tasklet_hi_schedule(&vdev->job_work);
 		return;
 	}
 
-	if (_isp_clk_dynamic_en(vdev, false) < 0)
-		return;
+	if (_is_fe_be_online(ctx))
+		raw_num = ctx->cam_id;
+
+	++ctx->isp_pipe_cfg[raw_num].first_frm_cnt;
 
 	if (_is_fe_be_online(ctx) && !ctx->is_slice_buf_on) { //fe->be->dram->post
 		struct isp_buffer *b;
@@ -8323,22 +7824,12 @@ static void _isp_postraw_done_handler(struct sop_vi_dev *vdev)
 			pre_out_q = &pre_fe_out_q[raw_num][chn_num];
 			isp_buf_queue(pre_out_q, b);
 		}
-	} else if (_is_all_online(ctx) || (_is_fe_be_online(ctx) && ctx->is_slice_buf_on)) {
-		raw_num = vi_get_first_raw_num(ctx);
-
-		//Update postraw stt gms/ae/hist_edge_v dma size/addr
-		_swap_post_sts_buf(ctx, raw_num);
-
-		//Change post done flag to be true
-		if (_is_fe_be_online(ctx) && ctx->is_slice_buf_on)
-			atomic_set(&vdev->ctx.is_post_done, 1);
 	}
 
 	atomic_set(&vdev->postraw_state, ISP_STATE_IDLE);
 	if (_is_be_post_online(ctx) && ctx->isp_pipe_cfg[raw_num].is_yuv_sensor)
 		atomic_set(&vdev->pre_be_state[ISP_BE_CH0], ISP_STATE_IDLE);
 
-	++ctx->isp_pipe_cfg[raw_num].first_frm_cnt;
 	++vdev->postraw_frame_number[raw_num];
 
 	vi_pr(VI_DBG, "Postraw_%d frm_done frm_num=%d\n", raw_num, vdev->postraw_frame_number[raw_num]);
@@ -8353,40 +7844,38 @@ static void _isp_postraw_done_handler(struct sop_vi_dev *vdev)
 				vdev->postraw_frame_number[raw_num]);
 	}
 
-	if (ctx->isp_pipe_cfg[raw_num].is_offline_scaler) {
-		sop_isp_dqbuf_list(vdev, vdev->postraw_frame_number[raw_num], raw_num);
-
-		vdev->vi_th[E_VI_TH_EVENT_HANDLER].flag = raw_num + 1;
-		wake_up(&vdev->vi_th[E_VI_TH_EVENT_HANDLER].wq);
-	}
+	cvi_isp_dqbuf_list(vdev, vdev->postraw_frame_number[raw_num], raw_num);
+	vdev->vi_th[E_VI_TH_EVENT_HANDLER].flag = raw_num + 1;
+	wake_up(&vdev->vi_th[E_VI_TH_EVENT_HANDLER].wq);
 
 	if (!ctx->isp_pipe_cfg[raw_num].is_raw_replay_fe &&
-	    !ctx->isp_pipe_cfg[raw_num].is_raw_replay_be &&
-	     ctx->isp_pipe_cfg[raw_num].raw_ai_isp_ap != RAW_AI_ISP_SPLT) {
+		!ctx->isp_pipe_cfg[raw_num].is_raw_replay_be) {
 		tasklet_hi_schedule(&vdev->job_work);
 
-		//TODO need refactor
 		if (!_is_all_online(ctx) && !ctx->is_slice_buf_on) {
-			isp_trig_whole_preraw(vdev, raw_num);
+			_pre_hw_enque(vdev, raw_num, ISP_FE_CH0);
+			if (ctx->isp_pipe_cfg[raw_num].is_hdr_on)
+				_pre_hw_enque(vdev, raw_num, ISP_FE_CH1);
 		}
 	}
 }
 
-static void _isp_cmdq_done_chk(struct sop_vi_dev *vdev, const u32 cmdq_intr)
+static void _isp_cmdq_done_chk(struct cvi_vi_dev *vdev, const u32 cmdq_intr)
 {
 	uintptr_t cmdq = vdev->ctx.phys_regs[ISP_BLK_ID_CMDQ];
 
 	if (cmdq_intr & BIT(0)) {
-		u8 cmdq_intr_stat = cmdq_intr_status(cmdq);
+		u8 cmdq_intr_status = cmdQ_intr_status(cmdq);
 
-		vi_pr(VI_DBG, "cmdq_intr 0x%08x\n", cmdq_intr_stat);
-		cmdq_intr_clr(cmdq, cmdq_intr_stat);
+		vi_pr(VI_DBG, "cmdq_intr 0x%08x\n", cmdq_intr_status);
+		cmdQ_intr_clr(cmdq, cmdq_intr_status);
 	}
 }
 
-static void _isp_csibdg_lite_frame_start_chk(struct sop_vi_dev *vdev,
-					     const enum sop_isp_raw raw_num,
-					     const u32 frame_start)
+static void _isp_csibdg_lite_frame_start_chk(
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
+	const u32 frame_start)
 {
 	if (frame_start & BIT(1)) {
 		vi_record_sof_perf(vdev, raw_num, ISP_FE_CH0);
@@ -8397,19 +7886,22 @@ static void _isp_csibdg_lite_frame_start_chk(struct sop_vi_dev *vdev,
 			raw_num - ISP_PRERAW_LITE0, ISP_FE_CH0, vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH0]);
 	}
 
-	if (frame_start & BIT(9))
+	if (frame_start & BIT(9)) {
 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH1];
+	}
 
-	if (frame_start & BIT(17))
+	if (frame_start & BIT(17)) {
 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH2];
+	}
 
-	if (frame_start & BIT(25))
+	if (frame_start & BIT(25)) {
 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH3];
+	}
 }
 
 static void _isp_csibdg_lite_frame_done_chk(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	const u32 frame_start)
 {
 	if (frame_start & BIT(3)) {
@@ -8436,8 +7928,8 @@ static void _isp_csibdg_lite_frame_done_chk(
 }
 
 static void _isp_splt_frame_done_chk(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	const u8 frame_done)
 {
 	// wdma done
@@ -8465,36 +7957,47 @@ static void _isp_splt_frame_done_chk(
 }
 
 static void _isp_pre_fe_frame_start_chk(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	const u8 frame_start)
 {
 	if (frame_start & BIT(0)) {
 		vi_record_sof_perf(vdev, raw_num, ISP_FE_CH0);
 
-		if (!vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be) {
+		if (!vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be)
 			++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH0];
-			if (!vdev->ctx.isp_pipe_cfg[raw_num].is_yuv_sensor) { //RGB sensor
+
+		vi_pr(VI_DBG, "pre_fe_%d sof chn_num=%d frm_num=%d\n",
+			raw_num, ISP_FE_CH0, vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH0]);
+
+		if (vdev->ctx.isp_pipe_cfg[raw_num].is_yuv_sensor) { //YUV sensor
+			if (!vdev->ctx.isp_pipe_cfg[raw_num].is_offline_scaler)
+				tasklet_hi_schedule(&vdev->job_work);
+		} else { //RGB sensor
+			if (!vdev->ctx.isp_pipe_cfg[raw_num].is_raw_replay_be) {
 				_isp_sof_handler(vdev, raw_num);
 				vi_event_queue(vdev, VI_EVENT_PRE0_SOF + vi_get_dev_num_by_raw(&vdev->ctx, raw_num),
-							vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH0]);
+						vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH0]);
 			}
 		}
 	}
 
-	if (frame_start & BIT(1))
+	if (frame_start & BIT(1)) {
 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH1];
+	}
 
-	if (frame_start & BIT(2))
+	if (frame_start & BIT(2)) {
 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH2];
+	}
 
-	if (frame_start & BIT(3))
+	if (frame_start & BIT(3)) {
 		++vdev->pre_fe_sof_cnt[raw_num][ISP_FE_CH3];
+	}
 }
 
 static void _isp_pre_fe_frame_done_chk(
-	struct sop_vi_dev *vdev,
-	const enum sop_isp_raw raw_num,
+	struct cvi_vi_dev *vdev,
+	const enum cvi_isp_raw raw_num,
 	const u8 frame_done)
 {
 	if (frame_done & BIT(0)) {
@@ -8521,7 +8024,7 @@ static void _isp_pre_fe_frame_done_chk(
 }
 
 static void _isp_pre_be_frame_done_chk(
-	struct sop_vi_dev *vdev,
+	struct cvi_vi_dev *vdev,
 	const u8 frame_done)
 {
 	if (frame_done & BIT(0)) {
@@ -8530,20 +8033,22 @@ static void _isp_pre_be_frame_done_chk(
 		_isp_pre_be_done_handler(vdev, ISP_BE_CH0);
 	}
 
-	if (frame_done & BIT(1))
+	if (frame_done & BIT(1)) {
 		_isp_pre_be_done_handler(vdev, ISP_BE_CH1);
+	}
 }
 
 static void _isp_postraw_shadow_done_chk(
-	struct sop_vi_dev *vdev,
+	struct cvi_vi_dev *vdev,
 	const u8 shadow_done)
 {
-	if (shadow_done)
+	if (shadow_done) {
 		_isp_postraw_shaw_done_handler(vdev);
+	}
 }
 
 static void _isp_postraw_frame_done_chk(
-	struct sop_vi_dev *vdev,
+	struct cvi_vi_dev *vdev,
 	const u8 frame_done)
 {
 	if (frame_done) {
@@ -8553,19 +8058,18 @@ static void _isp_postraw_frame_done_chk(
 	}
 }
 
-void vi_irq_handler(struct sop_vi_dev *vdev)
+void vi_irq_handler(struct cvi_vi_dev *vdev)
 {
 	struct isp_ctx *ctx = &vdev->ctx;
-	union reg_isp_csi_bdg_interrupt_status_0 cbdg_0_sts[ISP_PRERAW_MAX] = { 0 };
-	union reg_isp_csi_bdg_interrupt_status_1 cbdg_1_sts[ISP_PRERAW_MAX] = { 0 };
-	union reg_isp_top_int_event0 top_sts_0;
-	union reg_isp_top_int_event1 top_sts_1;
-	union reg_isp_top_int_event2 top_sts_2;
-	union reg_isp_top_int_event0_fe345 top_sts_0_fe345;
-	union reg_isp_top_int_event1_fe345 top_sts_1_fe345;
-	union reg_isp_top_int_event2_fe345 top_sts_2_fe345;
+	union REG_ISP_CSI_BDG_INTERRUPT_STATUS_0 cbdg_0_sts[ISP_PRERAW_MAX] = { 0 };
+	union REG_ISP_CSI_BDG_INTERRUPT_STATUS_1 cbdg_1_sts[ISP_PRERAW_MAX] = { 0 };
+	union REG_ISP_TOP_INT_EVENT0 top_sts_0;
+	union REG_ISP_TOP_INT_EVENT1 top_sts_1;
+	union REG_ISP_TOP_INT_EVENT2 top_sts_2;
+	union REG_ISP_TOP_INT_EVENT0_FE345 top_sts_0_fe345;
+	union REG_ISP_TOP_INT_EVENT1_FE345 top_sts_1_fe345;
+	union REG_ISP_TOP_INT_EVENT2_FE345 top_sts_2_fe345;
 	u8 i = 0, raw_num = ISP_PRERAW0;
-	u8 n;
 
 	isp_intr_status(ctx, &top_sts_0, &top_sts_1, &top_sts_2,
 			&top_sts_0_fe345, &top_sts_1_fe345, &top_sts_2_fe345);
@@ -8575,19 +8079,17 @@ void vi_irq_handler(struct sop_vi_dev *vdev)
 
 	vi_perf_record_dump();
 
-	for (n = ISP_PRERAW0; n < ISP_PRERAW_MAX; n++) {
-		if (!vdev->ctx.isp_pipe_enable[n])
+	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
 
-		raw_num = ctx->isp_bind_info[n].bind_fe_num;
 		isp_csi_intr_status(ctx, raw_num, &cbdg_0_sts[raw_num], &cbdg_1_sts[raw_num]);
 	}
 
-	for (n = ISP_PRERAW0; n < ISP_PRERAW_MAX; n++) {
-		if (!vdev->ctx.isp_pipe_enable[n])
+	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
 
-		raw_num = ctx->isp_bind_info[n].bind_fe_num;
 		ctx->isp_pipe_cfg[raw_num].dg_info.bdg_int_sts_0 = cbdg_0_sts[raw_num].raw;
 		ctx->isp_pipe_cfg[raw_num].dg_info.bdg_int_sts_1 = cbdg_1_sts[raw_num].raw;
 
@@ -8604,70 +8106,133 @@ void vi_irq_handler(struct sop_vi_dev *vdev)
 			ctx->isp_pipe_cfg[raw_num].dg_info.bdg_chn_debug[i] = ispblk_csibdg_chn_dbg(ctx, raw_num, i);
 	}
 
-	isp_err_chk(vdev, ctx, cbdg_0_sts, cbdg_1_sts);
+	if (isp_err_chk(vdev, ctx, cbdg_0_sts, cbdg_1_sts) == -1)
+		return;
 
 	//if (top_sts_0.bits.INT_DMA_ERR)
 	//	vi_pr(VI_ERR, "DMA error\n");
 
-	for (n = ISP_PRERAW0; n < ISP_PRERAW_MAX; n++) {
-		if (!vdev->ctx.isp_pipe_enable[n])
+	for (raw_num = ISP_PRERAW0; raw_num < ISP_PRERAW_MAX; raw_num++) {
+		if (!vdev->ctx.isp_pipe_enable[raw_num])
 			continue;
 
-		raw_num = ctx->isp_bind_info[n].bind_fe_num;
 		if (ctx->isp_pipe_cfg[raw_num].is_bt_demux) {
 			_isp_csibdg_lite_frame_start_chk(vdev, raw_num, cbdg_0_sts[raw_num].raw);
 			_isp_csibdg_lite_frame_done_chk(vdev, raw_num, cbdg_0_sts[raw_num].raw);
 		}
 	}
 
-	_isp_cmdq_done_chk(vdev, top_sts_2.bits.cmdq_int);
-	_isp_splt_frame_done_chk(vdev, ISP_PRERAW0, top_sts_0_fe345.bits.line_spliter_dma_done_fe0);
-	_isp_splt_frame_done_chk(vdev, ISP_PRERAW1, top_sts_0_fe345.bits.line_spliter_dma_done_fe1);
+	_isp_cmdq_done_chk(vdev, top_sts_2.bits.CMDQ_INT);
+	_isp_splt_frame_done_chk(vdev, ISP_PRERAW0, top_sts_0_fe345.bits.LINE_SPLITER_DMA_DONE_FE0);
+	_isp_splt_frame_done_chk(vdev, ISP_PRERAW1, top_sts_0_fe345.bits.LINE_SPLITER_DMA_DONE_FE1);
 
-	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW0, top_sts_2.bits.frame_start_fe0);
-	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW1, top_sts_2.bits.frame_start_fe1);
-	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW2, top_sts_2.bits.frame_start_fe2);
-	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW3, top_sts_2_fe345.bits.frame_start_fe3);
-	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW4, top_sts_2_fe345.bits.frame_start_fe4);
-	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW5, top_sts_2_fe345.bits.frame_start_fe5);
+	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW0, top_sts_2.bits.FRAME_START_FE0);
+	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW1, top_sts_2.bits.FRAME_START_FE1);
+	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW2, top_sts_2.bits.FRAME_START_FE2);
+	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW3, top_sts_2_fe345.bits.FRAME_START_FE3);
+	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW4, top_sts_2_fe345.bits.FRAME_START_FE4);
+	_isp_pre_fe_frame_start_chk(vdev, ISP_PRERAW5, top_sts_2_fe345.bits.FRAME_START_FE5);
 
-	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW0, top_sts_0.bits.frame_done_fe0);
-	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW1, top_sts_0.bits.frame_done_fe1);
-	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW2, top_sts_0.bits.frame_done_fe2);
-	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW3, top_sts_0_fe345.bits.frame_done_fe3);
-	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW4, top_sts_0_fe345.bits.frame_done_fe4);
-	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW5, top_sts_0_fe345.bits.frame_done_fe5);
+	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW0, top_sts_0.bits.FRAME_DONE_FE0);
+	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW1, top_sts_0.bits.FRAME_DONE_FE1);
+	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW2, top_sts_0.bits.FRAME_DONE_FE2);
+	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW3, top_sts_0_fe345.bits.FRAME_DONE_FE3);
+	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW4, top_sts_0_fe345.bits.FRAME_DONE_FE4);
+	_isp_pre_fe_frame_done_chk(vdev, ISP_PRERAW5, top_sts_0_fe345.bits.FRAME_DONE_FE5);
 
-	_isp_pre_be_frame_done_chk(vdev, top_sts_0.bits.frame_done_be);
-	_isp_postraw_shadow_done_chk(vdev, top_sts_0.bits.shaw_done_post);
-	_isp_postraw_frame_done_chk(vdev, top_sts_0.bits.frame_done_post);
+	_isp_pre_be_frame_done_chk(vdev, top_sts_0.bits.FRAME_DONE_BE);
+	_isp_postraw_shadow_done_chk(vdev, top_sts_0.bits.SHAW_DONE_POST);
+	_isp_postraw_frame_done_chk(vdev, top_sts_0.bits.FRAME_DONE_POST);
+}
+
+static int get_dma_buf_size(struct cvi_vi_dev *vdev)
+{
+	struct isp_ctx *ctx = &vdev->ctx;
+	enum cvi_isp_raw raw_max = ISP_PRERAW_MAX - 1;
+	u32 tmp_size = 0;
+	u32 buf_size = 0;
+	u8 raw_num = 0;
+
+	tmp_size = isp_mempool.size;
+	isp_mempool.base = 0xabde2000; //tmp addr only for check alignment
+	isp_mempool.size = 0x40000000; //1024M
+	isp_mempool.byteused = 0;
+
+	_vi_scene_ctrl(vdev);
+
+	for (raw_num = ISP_PRERAW0; raw_num < raw_max; raw_num++) {
+		if (!ctx->isp_pipe_enable[raw_num])
+			continue;
+
+		ctx->isp_pipe_cfg[raw_num].is_patgen_en = csi_patgen_en[raw_num];
+		if (ctx->isp_pipe_cfg[raw_num].is_patgen_en) {
+#ifndef PORTING_TEST
+			vdev->usr_fmt.width = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w;
+			vdev->usr_fmt.height = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h;
+			vdev->usr_crop.width = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w;
+			vdev->usr_crop.height = vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h;
+#else
+			vdev->usr_fmt.width = 1920;
+			vdev->usr_fmt.height = 1080;
+			vdev->usr_crop.width = 1920;
+			vdev->usr_crop.height = 1080;
+#endif
+			vdev->usr_fmt.code = ISP_BAYER_TYPE_BG;
+			vdev->usr_crop.left = 0;
+			vdev->usr_crop.top = 0;
+		}
+		vi_pr(VI_INFO, "pipe_%d patgen(%d), [usr]w_h(%d:%d), color mode(%d), [snr]w/h(%d:%d)\n",
+						raw_num, vdev->ctx.isp_pipe_cfg[raw_num].is_patgen_en,
+						vdev->usr_fmt.width, vdev->usr_fmt.height, vdev->usr_fmt.code,
+						vdev->snr_info[raw_num].snr_fmt.img_size[0].active_w,
+						vdev->snr_info[raw_num].snr_fmt.img_size[0].active_h);
+
+		_vi_ctrl_init(raw_num, vdev);
+	}
+
+	if (ctx->isp_pipe_cfg[ISP_PRERAW0].is_tile) {
+		ctx->isp_pipe_enable[ISP_PRERAW1] = true;
+		ctx->isp_bind_info[ISP_PRERAW1].is_bind = true;
+		ctx->isp_bind_info[ISP_PRERAW1].bind_dev_num = ctx->isp_bind_info[ISP_PRERAW0].bind_dev_num;
+		_isp_tile_calc_size(ctx);
+	}
+
+	_vi_get_dma_buf_size(&vdev->ctx);
+
+	buf_size = isp_mempool.byteused;
+
+	isp_mempool.base	= 0;
+	isp_mempool.size	= tmp_size;
+	isp_mempool.byteused	= 0;
+
+	return buf_size;
 }
 
 /*************************************************************************
  *	ISP V4L2 definition
  *************************************************************************/
-static void subcall_open(struct sop_vi_dev *vdev, bool on)
+static void subcall_open(struct cvi_vi_dev *vdev, bool on)
 {
-	struct sop_isp_device *dev =
-		container_of(vdev, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
 	struct v4l2_subdev *isp_sd = &dev->isp_sdev.sd;
 
 	v4l2_subdev_call(isp_sd, core, s_power, on);
 }
 
-static void subcall_s_stream(struct sop_vi_dev *vdev, bool on)
+static void subcall_s_stream(struct cvi_vi_dev *vdev, bool on)
 {
-	struct sop_isp_device *dev =
-		container_of(vdev, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
 	struct v4l2_subdev *isp_sd = &dev->isp_sdev.sd;
 
 	v4l2_subdev_call(isp_sd, video, s_stream, on);
 }
 
-static void subcall_s_sensor_hdr(struct sop_vi_dev *vdev, u8 chn_id, int on)
+static void subcall_s_sensor_hdr(struct cvi_vi_dev *vdev, u8 chn_id, int on)
 {
-	struct sop_isp_device *dev =
-		container_of(vdev, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
 	struct v4l2_subdev *sensor_sd = dev->sensors[chn_id].sd;
 	int hdr_on = on;
 
@@ -8679,13 +8244,13 @@ static void subcall_s_sensor_hdr(struct sop_vi_dev *vdev, u8 chn_id, int on)
 	v4l2_subdev_call(sensor_sd, core, ioctl, SNS_V4L2_SET_HDR_ON, &hdr_on);
 }
 
-static int subcall_get_sensor_mode(struct sop_vi_dev *vdev, u8 raw_num)
+static int subcall_get_sensor_mode(struct cvi_vi_dev *vdev, u8 raw_num)
 {
-	struct sop_isp_device *dev =
-		container_of(vdev, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
 	struct isp_ctx *ctx = &vdev->ctx;
-	u8 vi_pipe = vi_get_dev_num_by_raw(ctx, raw_num);
-	struct v4l2_subdev *sensor_sd = dev->sensors[vi_pipe].sd;
+	u8 chn_id = vi_get_dev_num_by_raw(ctx, raw_num);
+	struct v4l2_subdev *sensor_sd = dev->sensors[chn_id].sd;
 	struct v4l2_ctrl *link_freq;
 	struct v4l2_querymenu qm = { .id = V4L2_CID_LINK_FREQ};
 	int ret = 0;
@@ -8713,37 +8278,31 @@ static int subcall_get_sensor_mode(struct sop_vi_dev *vdev, u8 raw_num)
 	qm.index = mode_index;
 	ret = v4l2_querymenu(sensor_sd->ctrl_handler, &qm);
 	ctx->isp_pipe_cfg[raw_num].is_stagger_vsync = 0;
-	if (qm.value == MIPI_WDR_MODE_NONE) { //hdr off
+	if (qm.value == CVI_MIPI_WDR_MODE_NONE) { //hdr off
 		ctx->is_hdr_on = 0;
 		ctx->isp_pipe_cfg[raw_num].is_hdr_on = 0;
 		vdev->snr_info[raw_num].snr_fmt.frm_num = 1;
 	} else {//hdr on
 		ctx->is_hdr_on = 1;
 		ctx->isp_pipe_cfg[raw_num].is_hdr_on = 1;
-		if (qm.value == MIPI_WDR_MODE_VC)
+		if (qm.value == CVI_MIPI_WDR_MODE_VC) {
 			ctx->isp_pipe_cfg[raw_num].is_stagger_vsync = 1;
-
+		}
 		vdev->snr_info[raw_num].snr_fmt.frm_num = 2;
 	}
-
-	vi_pr(VI_INFO, "videv_%d raw_num:%d mipi_mode:%lld\n", vi_pipe, raw_num, qm.value);
 
 	return ret;
 }
 
-static int subcall_get_sensor_info(struct sop_vi_dev *vdev, u8 chn_id, u8 *raw_num)
+static int subcall_get_sensor_info(struct cvi_vi_dev *vdev, u8 chn_id, u8 *raw_num)
 {
-	struct sop_isp_device *dev =
-		container_of(vdev, struct sop_isp_device, vi_dev);
-	struct isp_ctx *ctx = &vdev->ctx;
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
 	struct v4l2_subdev *sensor_sd = dev->sensors[chn_id].sd;
 	struct v4l2_ctrl *link_freq;
 	struct v4l2_querymenu qm = { .id = V4L2_CID_LINK_FREQ};
 	int ret = 0;
 	int devno_index = SNS_CFG_TYPE_MIPI_DEV;
-	int data_index = SNS_CFG_TYPE_DATE_BIT;
-	int mipi_dev = 0;
-	bool is_yuv_sensor = false;
 
 	if (!sensor_sd) {
 		vi_pr(VI_INFO, "sensor subdev is NULL!\n");
@@ -8763,11 +8322,6 @@ static int subcall_get_sensor_info(struct sop_vi_dev *vdev, u8 chn_id, u8 *raw_n
 		return ret;
 	}
 
-	qm.index = data_index;
-	ret = v4l2_querymenu(sensor_sd->ctrl_handler, &qm);
-	if (qm.value == YUV422_8BIT || qm.value == YUV422_10BIT)
-		is_yuv_sensor = true;
-
 	//get mac devno
 	qm.index = devno_index;
 	ret = v4l2_querymenu(sensor_sd->ctrl_handler, &qm);
@@ -8775,33 +8329,17 @@ static int subcall_get_sensor_info(struct sop_vi_dev *vdev, u8 chn_id, u8 *raw_n
 		vi_pr(VI_INFO, "invalid devno(%lld)\n", qm.value);
 		return ret;
 	}
-	mipi_dev = qm.value;
-
-	*raw_num = mipi_dev;
-
-	// phyical link: mac3->fe1, mac1->fe3
-	if (*raw_num == ISP_PRERAW1)
-		*raw_num = ISP_PRERAW3;
-	else if (*raw_num == ISP_PRERAW3)
-		*raw_num = ISP_PRERAW1;
-	else
-		ctx->isp_bind_info[*raw_num].bind_fe_num = *raw_num;
-
-	ctx->isp_bind_info[chn_id].bind_fe_num = *raw_num;
-
-	if (is_yuv_sensor)
-		ctx->isp_pipe_cfg[chn_id].is_yuv_sensor = true;
-
-	vi_pr(VI_INFO, "pipe_%d sensor[%s], link to fe_%d\n", chn_id, sensor_sd->name, *raw_num);
+	*raw_num = qm.value;
+	vi_pr(VI_INFO, "%s links to mac%lld\n", sensor_sd->name, qm.value);
 
 	return ret;
 }
 
-static int subcall_get_size(struct sop_vi_dev *vdev, u8 chn_id,
+static int subcall_get_size(struct cvi_vi_dev *vdev, u8 chn_id,
 							struct v4l2_subdev_frame_size_enum *fse)
 {
-	struct sop_isp_device *dev =
-		container_of(vdev, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(vdev, struct cvi_isp_device, vi_dev);
 	struct v4l2_subdev *sd = dev->sensors[chn_id].sd;
 
 	if (!sd) {
@@ -8810,7 +8348,7 @@ static int subcall_get_size(struct sop_vi_dev *vdev, u8 chn_id,
 	}
 
 	fse->index = 0;
-	fse->pad = ISP_PAD_SINK;
+	fse->pad = CVI_ISP_PAD_SINK;
 	fse->which = V4L2_SUBDEV_FORMAT_ACTIVE;
 
 	v4l2_subdev_call(sd, pad, enum_frame_size, NULL, fse);
@@ -8818,32 +8356,7 @@ static int subcall_get_size(struct sop_vi_dev *vdev, u8 chn_id,
 	return 0;
 }
 
-static int subcall_get_frame_interval(struct sop_vi_dev *vdev, u8 chn_id,
-				      struct v4l2_subdev_frame_interval_enum *fps)
-{
-	struct sop_isp_device *dev = container_of(vdev, struct sop_isp_device, vi_dev);
-	struct v4l2_subdev *sd = dev->sensors[chn_id].sd;
-	int ret = -EINVAL;
-
-	if (!sd) {
-		vi_pr(VI_INFO, "sensor[%d] sd is NULL!\n", chn_id);
-		return ret;
-	}
-
-	fps->index = 0;
-	fps->pad = ISP_PAD_SINK;
-	fps->which = V4L2_SUBDEV_FORMAT_ACTIVE;
-
-	ret = v4l2_subdev_call(sd, pad, enum_frame_interval, NULL, fps);
-	if (ret) {
-		vi_pr(VI_INFO, "sensor[%d] subcall fail!\n", chn_id);
-		return ret;
-	}
-
-	return 0;
-}
-
-static void _subdev_init(struct sop_vi_dev *vdev, u8 chn_id, u8 *raw_num)
+static void _subdev_init(struct cvi_vi_dev *vdev, u8 chn_id, u8 *raw_num)
 {
 	struct v4l2_subdev_frame_size_enum fse;
 	struct isp_ctx *ctx = &vdev->ctx;
@@ -8856,6 +8369,13 @@ static void _subdev_init(struct sop_vi_dev *vdev, u8 chn_id, u8 *raw_num)
 		vi_pr(VI_INFO, "use chn_id(%d) as raw_num, may effect orignal bind\n", chn_id);
 		*raw_num = chn_id;
 	}
+
+#if defined(__CV186X__)
+	if (*raw_num == ISP_PRERAW1)
+		*raw_num = ISP_PRERAW3;
+	else if (*raw_num == ISP_PRERAW3)
+		*raw_num = ISP_PRERAW1;
+#endif
 
 	ret = subcall_get_size(vdev, chn_id, &fse);
 
@@ -8875,15 +8395,13 @@ static void _subdev_init(struct sop_vi_dev *vdev, u8 chn_id, u8 *raw_num)
 			chn_id, max_w, max_h, crop_w, crop_h);
 	}
 
-	g_vi_ctx->dev_attr[chn_id].size.width = max_w;
-	g_vi_ctx->dev_attr[chn_id].size.height = max_h;
-	g_vi_ctx->chn_status[chn_id].size.width = crop_w;
-	g_vi_ctx->chn_status[chn_id].size.height = crop_h;
+	ctx->isp_pipe_cfg[*raw_num].csibdg_width = max_w;
+	ctx->isp_pipe_cfg[*raw_num].csibdg_height = max_h;
+	ctx->isp_pipe_cfg[*raw_num].post_img_w = crop_w;
+	ctx->isp_pipe_cfg[*raw_num].post_img_h = crop_h;
 
-	if (ctx->isp_pipe_cfg[chn_id].is_yuv_sensor) {
-		vdev->fmt[chn_id] = &vip_formats[ISP_OUT_FMT_YUYV];
-	} else
-		vdev->fmt[chn_id] = &vip_formats[ISP_OUT_FMT_NV21];
+	// use default fmt
+	vdev->fmt[*raw_num] = &cvi_vip_formats[ISP_OUT_FMT_NV21];
 }
 
 static int get_video_index(struct video_device *dev)
@@ -8902,74 +8420,70 @@ static int get_video_index(struct video_device *dev)
 	return videoId;
 }
 
-
-static int calculate_sizeimage(struct sop_vi_dev *vdev, u8 chn_id)
+static int calculate_sizeimage(struct cvi_vi_dev *vdev, u8 raw_num)
 {
-	u32 crop_w = g_vi_ctx->chn_status[chn_id].size.width;
-	u32 crop_h = g_vi_ctx->chn_status[chn_id].size.height;
+	struct isp_ctx *ctx = &vdev->ctx;
+	u32 crop_w = ctx->isp_pipe_cfg[raw_num].post_img_w;
+	u32 crop_h = ctx->isp_pipe_cfg[raw_num].post_img_h;
 	u32 uv_ratio = 1;
 
-	uv_ratio = vdev->fmt[chn_id]->bit_depth[1] == vdev->fmt[chn_id]->bit_depth[2] ? 1 : 2;
+	uv_ratio = vdev->fmt[raw_num]->bit_depth[1] == vdev->fmt[raw_num]->bit_depth[2] ? 1 : 2;
 
-	vdev->pipe[chn_id].bytesperline[0] = vdev->pipe[chn_id].bytesperline[1] = crop_w;
-	vdev->pipe[chn_id].sizeimage[0] = vdev->pipe[chn_id].bytesperline[0] * crop_h;
-	vdev->pipe[chn_id].sizeimage[1] = vdev->pipe[chn_id].bytesperline[1] * crop_h / uv_ratio;
+	vdev->pipe[raw_num].bytesperline[0] = vdev->pipe[raw_num].bytesperline[1] = crop_w;
+	vdev->pipe[raw_num].sizeimage[0] = vdev->pipe[raw_num].bytesperline[0] * crop_h;
+	vdev->pipe[raw_num].sizeimage[1] = vdev->pipe[raw_num].bytesperline[1] * crop_h / uv_ratio;
 
 	return 0;
 }
 
-static void _v4l2_init_config_info(struct sop_vi_dev *vdev, u8 vi_dev, u8 raw_num)
+static void _v4l2_init_config_info(struct cvi_vi_dev *vdev, u8 ViDev, u8 raw_num)
 {
-	struct sop_isp_snr_info snr_info;
-	vi_pipe_attr_s pipe_attr;
+	struct cvi_isp_snr_info snr_info;
+	VI_PIPE_ATTR_S stPipeAttr;
 	struct isp_ctx *ctx = &vdev->ctx;
-	u32 *src_w = &g_vi_ctx->dev_attr[vi_dev].size.width;
-	u32 *src_h = &g_vi_ctx->dev_attr[vi_dev].size.height;
-	u32 *crop_w = &g_vi_ctx->chn_status[vi_dev].size.width;
-	u32 *crop_h = &g_vi_ctx->chn_status[vi_dev].size.height;
+	u32 *src_w = &ctx->isp_pipe_cfg[raw_num].csibdg_width;
+	u32 *src_h = &ctx->isp_pipe_cfg[raw_num].csibdg_height;
+	u32 *crop_w = &ctx->isp_pipe_cfg[raw_num].post_img_w;
+	u32 *crop_h = &ctx->isp_pipe_cfg[raw_num].post_img_h;
 
-	vi_pr(VI_INFO, "config videv_%d, fe_%d\n", vi_dev, raw_num);
+	vi_pr(VI_INFO, "config videv_%d, raw_pipe_%d\n", ViDev, raw_num);
 
 	check_size(src_w, src_h);
 	check_size(crop_w, crop_h);
 
-	g_vi_ctx->dev_attr[vi_dev].intf_mode = VI_MODE_MIPI;
-	g_vi_ctx->chn_status[vi_dev].enable = 1;
-	g_vi_ctx->chn_status[vi_dev].int_cnt = 0;
-	g_vi_ctx->chn_status[vi_dev].frame_num = 0;
-	g_vi_ctx->chn_status[vi_dev].prev_time = 0;
-	g_vi_ctx->chn_status[vi_dev].frame_rate = 0;
+	gViCtx->devAttr[ViDev].enIntfMode = VI_MODE_MIPI;
+	gViCtx->devAttr[ViDev].stSize.u32Width = *src_w;
+	gViCtx->devAttr[ViDev].stSize.u32Height = *src_h;
+	gViCtx->chnStatus[ViDev].bEnable = CVI_TRUE;
+	gViCtx->chnStatus[ViDev].stSize.u32Width = *crop_w;
+	gViCtx->chnStatus[ViDev].stSize.u32Height = *crop_h;
+	gViCtx->chnStatus[ViDev].u32IntCnt = 0;
+	gViCtx->chnStatus[ViDev].u32FrameNum = 0;
+	gViCtx->chnStatus[ViDev].u64PrevTime = 0;
+	gViCtx->chnStatus[ViDev].u32FrameRate = 0;
 
-	pipe_attr.yuv_skip = 0;
-	pipe_attr.yuv_bypass_path = 0;
-	pipe_attr.max_width = *src_w;
-	pipe_attr.max_height = *src_h;
-	pipe_attr.pixel_fmt = PIXEL_FORMAT_RGB_BAYER_12BPP;
-	pipe_attr.bit_width = DATA_BITWIDTH_12;
-	pipe_attr.frame_rate.src_frame_rate = -1;
-	pipe_attr.frame_rate.dst_frame_rate = -1;
-	pipe_attr.nr_en = 1;
-	pipe_attr.compress_mode = COMPRESS_MODE_NONE;
-	memset(&g_vi_ctx->pipe_attr[vi_dev], 0, sizeof(g_vi_ctx->pipe_attr[vi_dev]));
-	g_vi_ctx->is_pipe_created[vi_dev] = true;
-	if (!(g_vi_ctx->source[vi_dev] == VI_PIPE_FRAME_SOURCE_USER_FE ||
-	      g_vi_ctx->source[vi_dev] == VI_PIPE_FRAME_SOURCE_USER_BE))
-		g_vi_ctx->source[vi_dev] = VI_PIPE_FRAME_SOURCE_DEV;
-	g_vi_ctx->pipe_attr[vi_dev] = pipe_attr;
+	stPipeAttr.bYuvSkip = CVI_FALSE;
+	stPipeAttr.bYuvBypassPath = CVI_FALSE;
+	stPipeAttr.u32MaxW = gViCtx->devAttr[ViDev].stSize.u32Width;
+	stPipeAttr.u32MaxH = gViCtx->devAttr[ViDev].stSize.u32Height;
+	stPipeAttr.enPixFmt = PIXEL_FORMAT_RGB_BAYER_12BPP;
+	stPipeAttr.enBitWidth = DATA_BITWIDTH_12;
+	stPipeAttr.stFrameRate.s32SrcFrameRate = -1;
+	stPipeAttr.stFrameRate.s32DstFrameRate = -1;
+	stPipeAttr.bNrEn = CVI_TRUE;
+	stPipeAttr.bYuvBypassPath = CVI_FALSE;
+	stPipeAttr.enCompressMode = COMPRESS_MODE_NONE;
+	memset(&gViCtx->pipeAttr[ViDev], 0, sizeof(gViCtx->pipeAttr[ViDev]));
+	gViCtx->isPipeCreated[ViDev] = true;
+	if (!(gViCtx->enSource[ViDev] == VI_PIPE_FRAME_SOURCE_USER_FE ||
+		gViCtx->enSource[ViDev] == VI_PIPE_FRAME_SOURCE_USER_BE))
+		gViCtx->enSource[ViDev] = VI_PIPE_FRAME_SOURCE_DEV;
+	gViCtx->pipeAttr[ViDev] = stPipeAttr;
 
 	snr_info.raw_num = raw_num;
 	vdev->usr_fmt.width = *crop_w;
 	vdev->usr_fmt.height = *crop_h;
-	if (ctx->isp_pipe_cfg[vi_dev].is_yuv_sensor)
-		vdev->ctx.isp_pipe_enable[vi_dev] = true; //yuv channal
-	else
-		vdev->ctx.isp_pipe_enable[raw_num] = true;
-
-	ctx->isp_pipe_cfg[raw_num].csibdg_width = *src_w;
-	ctx->isp_pipe_cfg[raw_num].csibdg_height = *src_h;
-	ctx->isp_pipe_cfg[raw_num].post_img_w = *crop_w;
-	ctx->isp_pipe_cfg[raw_num].post_img_h = *crop_h;
-
+	vdev->ctx.isp_pipe_enable[snr_info.raw_num] = true; //A2 config
 	vdev->snr_info[raw_num].snr_fmt.img_size[0].max_width = *src_w;
 	vdev->snr_info[raw_num].snr_fmt.img_size[0].max_height = *src_h;
 	vdev->snr_info[raw_num].snr_fmt.img_size[0].start_x = 0;
@@ -8989,14 +8503,13 @@ static void _v4l2_init_config_info(struct sop_vi_dev *vdev, u8 vi_dev, u8 raw_nu
 		vdev->snr_info[raw_num].snr_fmt.img_size[1].active_h = *crop_h;
 	}
 
-	calculate_sizeimage(vdev, vi_dev);
+	calculate_sizeimage(vdev, raw_num);
 }
 
-static int sop_isp_querycap(struct file *file, void *priv,
+static int cvi_isp_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
-	struct sop_vi_dev *vdev = video_drvdata(file);
-
+	struct cvi_vi_dev *vdev = video_drvdata(file);
 	vi_pr(VI_INFO, "+\n");
 	cap->capabilities = vdev->vid_caps | V4L2_CAP_DEVICE_CAPS |
 						V4L2_CAP_VIDEO_CAPTURE;
@@ -9005,7 +8518,7 @@ static int sop_isp_querycap(struct file *file, void *priv,
 	return 0;
 }
 
-static int sop_isp_g_ctrl(
+static int cvi_isp_g_ctrl(
 	struct file *file,
 	void *priv,
 	struct v4l2_control *vc)
@@ -9014,7 +8527,7 @@ static int sop_isp_g_ctrl(
 	return rc;
 }
 
-static int sop_isp_s_ctrl(
+static int cvi_isp_s_ctrl(
 	struct file *file,
 	void *priv,
 	struct v4l2_control *vc)
@@ -9023,12 +8536,12 @@ static int sop_isp_s_ctrl(
 	return rc;
 }
 
-static int sop_isp_g_ext_ctrls(
+static int cvi_isp_g_ext_ctrls(
 	struct file *file,
 	void *priv,
 	struct v4l2_ext_controls *vc)
 {
-	struct sop_vi_dev *vdev = video_drvdata(file);
+	struct cvi_vi_dev *vdev = video_drvdata(file);
 	struct video_device *video = video_devdata(file);
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct v4l2_ext_control *p = vc->controls;
@@ -9073,10 +8586,10 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_STS_MEM:
 		{
-			struct sop_isp_sts_mem sts_mem;
+			struct cvi_isp_sts_mem sts_mem;
 			int rval = 0;
 
-			if (copy_from_user(&sts_mem, p->ptr, sizeof(struct sop_isp_sts_mem)) != 0)
+			if (copy_from_user(&sts_mem, p->ptr, sizeof(struct cvi_isp_sts_mem)) != 0)
 				break;
 
 			raw_num = vi_get_raw_num_by_dev(ctx, sts_mem.raw_num);
@@ -9087,7 +8600,7 @@ static int sop_isp_g_ext_ctrls(
 
 			rval = copy_to_user(p->ptr,
 						isp_bufpool[raw_num].sts_mem,
-						sizeof(struct sop_isp_sts_mem) * 2);
+						sizeof(struct cvi_isp_sts_mem) * 2);
 
 			if (rval)
 				vi_pr(VI_ERR, "fail copying %d bytes of ISP_STS_MEM info\n", rval);
@@ -9098,10 +8611,10 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_LSC_PHY_BUF:
 		{
-			struct sop_vip_memblock *isp_mem;
+			struct cvi_vip_memblock *isp_mem;
 
-			isp_mem = vmalloc(sizeof(struct sop_vip_memblock));
-			if (copy_from_user(isp_mem, p->ptr, sizeof(struct sop_vip_memblock)) != 0) {
+			isp_mem = vmalloc(sizeof(struct cvi_vip_memblock));
+			if (copy_from_user(isp_mem, p->ptr, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9111,7 +8624,7 @@ static int sop_isp_g_ext_ctrls(
 			isp_mem->phy_addr = isp_bufpool[raw_num].lsc;
 			isp_mem->size = ispblk_dma_buf_get_size(ctx, raw_num, ISP_BLK_ID_DMA_CTL_LSC_LE);
 
-			if (copy_to_user(p->ptr, isp_mem, sizeof(struct sop_vip_memblock)) != 0) {
+			if (copy_to_user(p->ptr, isp_mem, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9124,22 +8637,28 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_PIPE_DUMP:
 		{
-			struct sop_vip_isp_raw_blk dump[2];
+			struct cvi_vip_isp_raw_blk dump[2];
 
-			if (copy_from_user(&dump[0], p->ptr, sizeof(struct sop_vip_isp_raw_blk) * 2) != 0)
+			if (copy_from_user(&dump[0], p->ptr, sizeof(struct cvi_vip_isp_raw_blk) * 2) != 0)
 				break;
 
+	#if 0//PORTING_TEST //test only
+			dump[0].raw_dump.phy_addr = 0x11223344;
+			if (copy_to_user(p->ptr, &dump[0], sizeof(struct cvi_vip_isp_raw_blk) * 2) != 0)
+				break;
+			rc = 0;
+	#else
 			dump[0].raw_dump.raw_num = raw_num;
 			rc = isp_raw_dump(vdev, &dump[0]);
-			if (copy_to_user(p->ptr, &dump[0], sizeof(struct sop_vip_isp_raw_blk) * 2) != 0)
+			if (copy_to_user(p->ptr, &dump[0], sizeof(struct cvi_vip_isp_raw_blk) * 2) != 0)
 				break;
-
+	#endif
 			break;
 		}
 
 		case VI_IOCTL_GET_SCENE_INFO:
 		{
-			enum isp_scene_info info = FE_ON_BE_OFF_POST_ON_SC;
+			enum ISP_SCENE_INFO info = FE_ON_BE_OFF_POST_ON_SC;
 
 			if (ctx->isp_pipe_cfg[ISP_PRERAW0].is_offline_scaler) {
 				if (_is_fe_be_online(ctx))
@@ -9173,7 +8692,7 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_DEV_NUM:
 		{
-			p->value = g_vi_ctx->total_dev_num;
+			p->value = gViCtx->total_dev_num;
 			rc = 0;
 			break;
 		}
@@ -9233,8 +8752,9 @@ static int sop_isp_g_ext_ctrls(
 
 			p->value = vi_tuning_get_clut_tbl_idx(raw_num, tun_idx);
 
-			if (p->value < 0)
+			if (p->value < 0) {
 				break;
+			}
 
 			rc = 0;
 			break;
@@ -9242,15 +8762,15 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_FSWDR_PHY_BUF:
 		{
-			struct sop_vip_memblock *isp_mem;
+			struct cvi_vip_memblock *isp_mem;
 
-			isp_mem = vmalloc(sizeof(struct sop_vip_memblock));
-			if (copy_from_user(isp_mem, p->ptr, sizeof(struct sop_vip_memblock)) != 0) {
+			isp_mem = vmalloc(sizeof(struct cvi_vip_memblock));
+			if (copy_from_user(isp_mem, p->ptr, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
 
-			isp_mem->size = sizeof(struct sop_vip_isp_fswdr_report);
+			isp_mem->size = sizeof(struct cvi_vip_isp_fswdr_report);
 			if (isp_bufpool[raw_num].fswdr_rpt == NULL) {
 				isp_bufpool[raw_num].fswdr_rpt = kmalloc(
 					isp_mem->size, GFP_DMA | GFP_KERNEL);
@@ -9264,7 +8784,7 @@ static int sop_isp_g_ext_ctrls(
 			isp_mem->vir_addr = isp_bufpool[raw_num].fswdr_rpt;
 			isp_mem->phy_addr = virt_to_phys(isp_bufpool[raw_num].fswdr_rpt);
 
-			if (copy_to_user(p->ptr, isp_mem, sizeof(struct sop_vip_memblock)) != 0) {
+			if (copy_to_user(p->ptr, isp_mem, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9289,11 +8809,11 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_RGBMAP_LE_PHY_BUF:
 		{
-			struct sop_vip_memblock *isp_mem;
+			struct cvi_vip_memblock *isp_mem;
 			u8 raw_num;
 
-			isp_mem = vmalloc(sizeof(struct sop_vip_memblock));
-			if (copy_from_user(isp_mem, p->ptr, sizeof(struct sop_vip_memblock)) != 0) {
+			isp_mem = vmalloc(sizeof(struct cvi_vip_memblock));
+			if (copy_from_user(isp_mem, p->ptr, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9302,7 +8822,7 @@ static int sop_isp_g_ext_ctrls(
 			isp_mem->phy_addr = isp_bufpool[raw_num].rgbmap_le[0];
 			isp_mem->size = ispblk_dma_buf_get_size(ctx, raw_num, ISP_BLK_ID_DMA_CTL_FE0_RGBMAP_LE);
 
-			if (copy_to_user(p->ptr, isp_mem, sizeof(struct sop_vip_memblock)) != 0) {
+			if (copy_to_user(p->ptr, isp_mem, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9315,11 +8835,11 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_RGBMAP_SE_PHY_BUF:
 		{
-			struct sop_vip_memblock *isp_mem;
+			struct cvi_vip_memblock *isp_mem;
 			u8 raw_num;
 
-			isp_mem = vmalloc(sizeof(struct sop_vip_memblock));
-			if (copy_from_user(isp_mem, p->ptr, sizeof(struct sop_vip_memblock)) != 0) {
+			isp_mem = vmalloc(sizeof(struct cvi_vip_memblock));
+			if (copy_from_user(isp_mem, p->ptr, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9328,7 +8848,7 @@ static int sop_isp_g_ext_ctrls(
 			isp_mem->phy_addr = isp_bufpool[raw_num].rgbmap_se[0];
 			isp_mem->size = ispblk_dma_buf_get_size(ctx, raw_num, ISP_BLK_ID_DMA_CTL_FE0_RGBMAP_SE);
 
-			if (copy_to_user(p->ptr, isp_mem, sizeof(struct sop_vip_memblock)) != 0) {
+			if (copy_to_user(p->ptr, isp_mem, sizeof(struct cvi_vip_memblock)) != 0) {
 				vfree(isp_mem);
 				break;
 			}
@@ -9341,10 +8861,10 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_V4L2_BUF_PHY_ADDR:
 		{
-			struct sop_isp_buf *sop_vb, *tmp;
+			struct cvi_isp_buf *cvi_vb, *tmp;
 			struct vb2_buffer *vb2_buf;
 			unsigned long flags;
-			u64 *dma_addr;
+			uint64_t *dma_addr;
 			int size;
 			int i = 0;
 
@@ -9353,20 +8873,20 @@ static int sop_isp_g_ext_ctrls(
 				break;
 			}
 
-			size = vdev->qbuf_num[raw_num] * sizeof(u64);
+			size = vdev->qbuf_num[raw_num] * sizeof(uint64_t);
 			if (size <= 0) {
 				vi_pr(VI_ERR, "raw_%d qbuf_num is error!\n", raw_num);
 				break;
 			}
 			dma_addr = vmalloc(size);
 
-			spin_lock_irqsave(&vdev->qbuf_lock[raw_num], flags);
-			list_for_each_entry_safe(sop_vb, tmp, &(vdev->qbuf_list[raw_num]), list) {
-				vb2_buf = &(sop_vb->buf.vb2_buf);
+			spin_lock_irqsave(&vdev->qbuf_lock, flags);
+			list_for_each_entry_safe(cvi_vb, tmp, &(vdev->qbuf_list[raw_num]), list) {
+				vb2_buf = &(cvi_vb->buf.vb2_buf);
 				dma_addr[i] = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
 				i++;
 			}
-			spin_unlock_irqrestore(&vdev->qbuf_lock[raw_num], flags);
+			spin_unlock_irqrestore(&vdev->qbuf_lock, flags);
 
 			if (copy_to_user(p->ptr, dma_addr, size) != 0) {
 				vfree(dma_addr);
@@ -9381,15 +8901,15 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_PIPE_ATTR:
 		{
-			if (g_vi_ctx->pipe_attr[chn_id].max_width == 0 &&
-				g_vi_ctx->pipe_attr[chn_id].max_height == 0) {
+			if (gViCtx->pipeAttr[chn_id].u32MaxW == 0 &&
+				gViCtx->pipeAttr[chn_id].u32MaxH == 0) {
 				vi_pr(VI_ERR, "SetPipeAttr first\n");
 				return -1;
 			}
 
-			if (copy_to_user(p->ptr, &g_vi_ctx->pipe_attr[chn_id],
-					sizeof(vi_pipe_attr_s)) != 0) {
-				vi_pr(VI_ERR, "vi_pipe_attr_s copy to user fail.\n");
+			if (copy_to_user(p->ptr, &gViCtx->pipeAttr[chn_id],
+					sizeof(VI_PIPE_ATTR_S)) != 0) {
+				vi_pr(VI_ERR, "VI_PIPE_ATTR_S copy to user fail.\n");
 				rc = -1;
 			}
 
@@ -9399,19 +8919,19 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_CHN_FRAME:
 		{
-			video_frame_info_s v_frm_info;
+			VIDEO_FRAME_INFO_S v_frm_info;
 
 			vi_pr(VI_INFO, "GET_CHN_FRAME\n");
 
-			if (copy_from_user(&v_frm_info, p->ptr, sizeof(video_frame_info_s)) != 0) {
-				vi_pr(VI_ERR, "video_frame_info_s copy from user fail.\n");
+			if (copy_from_user(&v_frm_info, p->ptr, sizeof(VIDEO_FRAME_INFO_S)) != 0) {
+				vi_pr(VI_ERR, "VIDEO_FRAME_INFO_S copy from user fail.\n");
 				break;
 			}
 
 			rc = vi_get_chn_frame(vdev, chn_id, &v_frm_info, 1000);
 
-			if (copy_to_user(p->ptr, &v_frm_info, sizeof(video_frame_info_s)) != 0) {
-				vi_pr(VI_ERR, "video_frame_info_s copy to user fail.\n");
+			if (copy_to_user(p->ptr, &v_frm_info, sizeof(VIDEO_FRAME_INFO_S)) != 0) {
+				vi_pr(VI_ERR, "VIDEO_FRAME_INFO_S copy to user fail.\n");
 				rc = -1;
 				break;
 			}
@@ -9420,17 +8940,17 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_PIPE_FRAME:
 		{
-			video_frame_info_s v_frm_info[2];
+			VIDEO_FRAME_INFO_S v_frm_info[2];
 
-			if (copy_from_user(v_frm_info, p->ptr, sizeof(video_frame_info_s) * 2) != 0) {
-				vi_pr(VI_ERR, "video_frame_info_s copy from user fail.\n");
+			if (copy_from_user(v_frm_info, p->ptr, sizeof(VIDEO_FRAME_INFO_S) * 2) != 0) {
+				vi_pr(VI_ERR, "VIDEO_FRAME_INFO_S copy from user fail.\n");
 				break;
 			}
 
 			rc = vi_get_pipe_frame(vdev, chn_id, v_frm_info, 1000);
 
-			if (copy_to_user(p->ptr, v_frm_info, sizeof(video_frame_info_s) * 2) != 0) {
-				vi_pr(VI_ERR, "video_frame_info_s copy to user fail.\n");
+			if (copy_to_user(p->ptr, v_frm_info, sizeof(VIDEO_FRAME_INFO_S) * 2) != 0) {
+				vi_pr(VI_ERR, "VIDEO_FRAME_INFO_S copy to user fail.\n");
 				rc = -1;
 				break;
 			}
@@ -9439,9 +8959,9 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_PIPE_DUMP_ATTR:
 		{
-			if (copy_to_user(p->ptr, &g_vi_ctx->dump_attr[chn_id],
-					sizeof(vi_dump_attr_s)) != 0) {
-				vi_pr(VI_ERR, "vi_pipe_attr_s copy to user fail.\n");
+			if (copy_to_user(p->ptr, &gViCtx->dumpAttr[chn_id],
+					sizeof(VI_DUMP_ATTR_S)) != 0) {
+				vi_pr(VI_ERR, "VI_PIPE_ATTR_S copy to user fail.\n");
 				rc = -1;
 				break;
 			}
@@ -9451,9 +8971,9 @@ static int sop_isp_g_ext_ctrls(
 
 		case VI_IOCTL_GET_DEV_ATTR:
 		{
-			if (copy_to_user(p->ptr, &g_vi_ctx->dev_attr[chn_id],
-					 sizeof(vi_dev_attr_s)) != 0) {
-				vi_pr(VI_ERR, "vi_dev_attr_s copy to user fail.\n");
+			if (copy_to_user(p->ptr, &gViCtx->devAttr[chn_id],
+					sizeof(VI_DEV_ATTR_S)) != 0) {
+				vi_pr(VI_ERR, "VI_DEV_ATTR_S copy to user fail.\n");
 				break;
 			}
 
@@ -9472,7 +8992,8 @@ static int sop_isp_g_ext_ctrls(
 			msecs_to_jiffies(timeout));
 
 			if (!ret) {
-				vi_pr(VI_WARN, "dev_%d wait raw timeout(%d ms)\n", chn_id, timeout);
+				vi_pr(VI_WARN, "dev_%d wait raw timeout(%d ms)\n",
+					chn_id, timeout);
 				break;
 			}
 
@@ -9493,12 +9014,12 @@ static int sop_isp_g_ext_ctrls(
 	return rc;
 }
 
-static int sop_isp_s_ext_ctrls(
+static int cvi_isp_s_ext_ctrls(
 	struct file *file,
 	void *priv,
 	struct v4l2_ext_controls *vc)
 {
-	struct sop_vi_dev *vdev = video_drvdata(file);
+	struct cvi_vi_dev *vdev = video_drvdata(file);
 	struct video_device *video = video_devdata(file);
 	struct isp_ctx *ctx = &vdev->ctx;
 	struct v4l2_ext_control *p = vc->controls;
@@ -9538,7 +9059,7 @@ static int sop_isp_s_ext_ctrls(
 			ctx->isp_pipe_cfg[raw_num].tnr_mode =
 				p->value ? ISP_TNR_TYPE_NEW_MODE : ISP_TNR_TYPE_OLD_MODE;
 			vi_pr(VI_INFO, "set raw_%d is_new_3dnr_on=%d\n", raw_num,
-			      (ctx->isp_pipe_cfg[raw_num].tnr_mode == ISP_TNR_TYPE_NEW_MODE) ? 1 : 0);
+				(ctx->isp_pipe_cfg[raw_num].tnr_mode == ISP_TNR_TYPE_NEW_MODE) ? 1 : 0);
 			rc = 0;
 			break;
 		}
@@ -9589,13 +9110,13 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_SNR_CFG_NODE:
 		{
-			struct sop_isp_snr_update *snr_update;
+			struct cvi_isp_snr_update *snr_update;
 
 			if (vdev->ctx.isp_pipe_cfg[ISP_PRERAW0].is_raw_replay_be)
 				break;
 
-			snr_update = vmalloc(sizeof(struct sop_isp_snr_update));
-			if (copy_from_user(snr_update, p->ptr, sizeof(struct sop_isp_snr_update)) != 0) {
+			snr_update = vmalloc(sizeof(struct cvi_isp_snr_update));
+			if (copy_from_user(snr_update, p->ptr, sizeof(struct cvi_isp_snr_update)) != 0) {
 				vi_pr(VI_ERR, "SNR_CFG_NODE copy from user fail.\n");
 				vfree(snr_update);
 				break;
@@ -9614,13 +9135,12 @@ static int sop_isp_s_ext_ctrls(
 				break;
 			}
 
-			vi_pr(VI_DBG,
-			      "raw_num=%d,magic_num=%d,regs_num=%d,i2c_update=%d,isp_update=%d\n",
-			      raw_num,
-			      snr_update->snr_cfg_node.snsr.magic_num,
-			      snr_update->snr_cfg_node.snsr.regs_num,
-			      snr_update->snr_cfg_node.snsr.need_update,
-			      snr_update->snr_cfg_node.isp.need_update);
+			vi_pr(VI_DBG, "raw_num=%d, magic_num=%d, regs_num=%d, i2c_update=%d, isp_update=%d\n",
+				raw_num,
+				snr_update->snr_cfg_node.snsr.magic_num,
+				snr_update->snr_cfg_node.snsr.regs_num,
+				snr_update->snr_cfg_node.snsr.need_update,
+				snr_update->snr_cfg_node.isp.need_update);
 
 			_isp_snr_cfg_enq(snr_update, raw_num);
 
@@ -9632,9 +9152,9 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_SNR_INFO:
 		{
-			struct sop_isp_snr_info snr_info;
+			struct cvi_isp_snr_info snr_info;
 
-			if (copy_from_user(&snr_info, p->ptr, sizeof(struct sop_isp_snr_info)) != 0)
+			if (copy_from_user(&snr_info, p->ptr, sizeof(struct cvi_isp_snr_info)) != 0)
 				break;
 
 			vdev->snr_info[raw_num].color_mode = snr_info.color_mode;
@@ -9646,15 +9166,15 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_MMAP_GRID_SIZE:
 		{
-			struct sop_isp_mmap_grid_size m_gd_sz;
+			struct cvi_isp_mmap_grid_size m_gd_sz;
 
-			if (copy_from_user(&m_gd_sz, p->ptr, sizeof(struct sop_isp_mmap_grid_size)) != 0)
+			if (copy_from_user(&m_gd_sz, p->ptr, sizeof(struct cvi_isp_mmap_grid_size)) != 0)
 				break;
 
 			raw_num = vi_get_raw_num_by_dev(ctx, m_gd_sz.raw_num);
 			m_gd_sz.grid_size = ctx->mmap_grid_size[raw_num];
 
-			if (copy_to_user(p->ptr, &m_gd_sz, sizeof(struct sop_isp_mmap_grid_size)) != 0)
+			if (copy_to_user(p->ptr, &m_gd_sz, sizeof(struct cvi_isp_mmap_grid_size)) != 0)
 				break;
 
 			rc = 0;
@@ -9669,7 +9189,7 @@ static int sop_isp_s_ext_ctrls(
 			rval = copy_from_user(&proc_cfg, p->ptr, sizeof(struct isp_proc_cfg));
 			if ((rval != 0) || (proc_cfg.buffer_size == 0))
 				break;
-			isp_proc_set_proc_content(proc_cfg.buffer, proc_cfg.buffer_size);
+			isp_proc_setProcContent(proc_cfg.buffer, proc_cfg.buffer_size);
 
 			rc = 0;
 			break;
@@ -9677,10 +9197,10 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_DMA_BUF_INFO:
 		{
-			struct sop_vi_dma_buf_info info;
+			struct cvi_vi_dma_buf_info info;
 			int rval = 0;
 
-			rval = copy_from_user(&info, p->ptr, sizeof(struct sop_vi_dma_buf_info));
+			rval = copy_from_user(&info, p->ptr, sizeof(struct cvi_vi_dma_buf_info));
 			if ((rval != 0) || (info.size == 0) || (info.paddr == 0))
 				break;
 
@@ -9696,9 +9216,9 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_PIPE_ATTR:
 		{
-			if (copy_from_user(&g_vi_ctx->pipe_attr[chn_id], p->ptr,
-					   sizeof(vi_pipe_attr_s)) != 0) {
-				vi_pr(VI_ERR, "vi_pipe_attr_s copy from user fail.\n");
+			if (copy_from_user(&gViCtx->pipeAttr[chn_id], p->ptr,
+					sizeof(VI_PIPE_ATTR_S)) != 0) {
+				vi_pr(VI_ERR, "VI_PIPE_ATTR_S copy from user fail.\n");
 				rc = -1;
 				break;
 			}
@@ -9709,9 +9229,8 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_BYPASS_FRM:
 		{
-			g_vi_ctx->bypass_frm[raw_num] =  p->value;
-			vi_pr(VI_INFO, "dev_%d set pipe_%d bypass_frm(%d)\n",
-			      chn_id, raw_num, p->value);
+			gViCtx->bypass_frm[raw_num] =  p->value;
+			vi_pr(VI_INFO, "dev_%d set pipe_%d bypass_frm(%d)\n", chn_id, raw_num, p->value);
 			rc = 0;
 			break;
 		}
@@ -9726,11 +9245,10 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_RELEASE_PIPE_FRAME:
 		{
-			video_frame_info_s v_frm_info[2];
-
+			VIDEO_FRAME_INFO_S v_frm_info[2];
 			vi_pr(VI_INFO, "RELEASE_PIPE_FRAME\n");
-			if (copy_from_user(v_frm_info, p->ptr, sizeof(video_frame_info_s) * 2) != 0) {
-				vi_pr(VI_ERR, "video_frame_info_s copy from user fail.\n");
+			if (copy_from_user(v_frm_info, p->ptr, sizeof(VIDEO_FRAME_INFO_S) * 2) != 0) {
+				vi_pr(VI_ERR, "VIDEO_FRAME_INFO_S copy from user fail.\n");
 				break;
 			}
 
@@ -9740,14 +9258,13 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_PIPE_DUMP_ATTR:
 		{
-			vi_dump_attr_s dump_attr;
-
+			VI_DUMP_ATTR_S dump_attr;
 			vi_pr(VI_INFO, "SET_PIPE_DUMP_ATTR\n");
-			if (copy_from_user(&dump_attr, p->ptr, sizeof(vi_dump_attr_s)) != 0) {
-				vi_pr(VI_ERR, "vi_pipe_attr_s copy from user fail.\n");
+			if (copy_from_user(&dump_attr, p->ptr, sizeof(VI_DUMP_ATTR_S)) != 0) {
+				vi_pr(VI_ERR, "VI_PIPE_ATTR_S copy from user fail.\n");
 				break;
 			}
-			g_vi_ctx->dump_attr[chn_id] = dump_attr;
+			gViCtx->dumpAttr[chn_id] = dump_attr;
 
 			rc = 0;
 			break;
@@ -9755,56 +9272,55 @@ static int sop_isp_s_ext_ctrls(
 
 		case VI_IOCTL_SET_DEV_ATTR:
 		{
-			vi_dev_attr_s dev_attr;
+			VI_DEV_ATTR_S dev_attr;
 			u8 chn_num;
 
-			if (copy_from_user(&dev_attr, p->ptr, sizeof(vi_dev_attr_s)) != 0) {
-				vi_pr(VI_ERR, "vi_dev_attr_s copy from user fail.\n");
+			vi_pr(VI_INFO, "raw_%d set dev_attr\n", raw_num);
+
+			if (copy_from_user(&dev_attr, p->ptr, sizeof(VI_DEV_ATTR_S)) != 0) {
+				vi_pr(VI_ERR, "VI_DEV_ATTR_S copy from user fail.\n");
 				break;
 			}
 
-			if (dev_attr.input_data_type == VI_DATA_TYPE_YUV) {
- 				vi_pr(VI_INFO, "dev_%d set devattr, workmode(%d),dataseq(%d)\n",
-				      chn_id, dev_attr.work_mode, dev_attr.data_seq);
-				switch (dev_attr.work_mode) {
-				case VI_WORK_MODE_1MULTIPLEX:
+			if (dev_attr.enInputDataType == VI_DATA_TYPE_YUV) {
+				switch (dev_attr.enWorkMode) {
+				case VI_WORK_MODE_1Multiplex:
 					chn_num = 1;
 					break;
-				case VI_WORK_MODE_2MULTIPLEX:
+				case VI_WORK_MODE_2Multiplex:
 					chn_num = 2;
 					break;
-				case VI_WORK_MODE_3MULTIPLEX:
+				case VI_WORK_MODE_3Multiplex:
 					chn_num = 3;
 					break;
-				case VI_WORK_MODE_4MULTIPLEX:
+				case VI_WORK_MODE_4Multiplex:
 					chn_num = 4;
 					break;
 				default:
 					vi_pr(VI_ERR, "SNR work mode(%d) is wrong\n",
-							dev_attr.work_mode);
+							dev_attr.enWorkMode);
 					return rc;
 				}
 			}
-			g_vi_ctx->dev_attr[chn_id].chn_num = chn_num;
+			gViCtx->devAttr[chn_id].chn_num = chn_num;
 
-			if (dev_attr.input_data_type == VI_DATA_TYPE_YUV ||
-				dev_attr.input_data_type == VI_DATA_TYPE_YUV_EARLY) {
-				raw_num = ctx->isp_bind_info[chn_id].bind_fe_num;
+			if (dev_attr.enInputDataType == VI_DATA_TYPE_YUV ||
+				dev_attr.enInputDataType == VI_DATA_TYPE_YUV_EARLY) {
 				ctx->isp_pipe_cfg[raw_num].is_yuv_sensor = true;
-				ctx->isp_pipe_cfg[raw_num].inf_mode = dev_attr.intf_mode;
-				ctx->isp_pipe_cfg[raw_num].mux_mode = dev_attr.work_mode;
-				ctx->isp_pipe_cfg[raw_num].data_seq = dev_attr.data_seq;
-				ctx->isp_pipe_cfg[raw_num].yuv_scene_mode = dev_attr.yuv_scene_mode;
-				vdev->fmt[chn_id] = &vip_formats[ISP_OUT_FMT_YUYV];
-				calculate_sizeimage(vdev, chn_id);
+				ctx->isp_pipe_cfg[raw_num].infMode = dev_attr.enIntfMode;
+				ctx->isp_pipe_cfg[raw_num].muxMode = dev_attr.enWorkMode;
+				ctx->isp_pipe_cfg[raw_num].enDataSeq = dev_attr.enDataSeq;
+				ctx->isp_pipe_cfg[raw_num].yuv_scene_mode = dev_attr.enYuvSceneMode;
+				vdev->fmt[raw_num] = &cvi_vip_formats[ISP_OUT_FMT_YUYV];
+				calculate_sizeimage(vdev, raw_num);
 			}
 
-			if (dev_attr.intf_mode == VI_MODE_LVDS) {
+			if (dev_attr.enIntfMode == VI_MODE_LVDS) {
 				ctx->is_sublvds_path = true;
 				vi_pr(VI_WARN, "SUBLVDS_PATH_ON(%d)\n", ctx->is_sublvds_path);
 			}
 
-			g_vi_ctx->dev_attr[chn_id] = dev_attr;
+			gViCtx->devAttr[chn_id] = dev_attr;
 
 			rc = 0;
 			break;
@@ -9817,8 +9333,8 @@ static int sop_isp_s_ext_ctrls(
 			if (copy_from_user(&cfg, p->ptr, sizeof(ai_isp_cfg_t)))
 				break;
 
-			vi_pr(VI_INFO, "[ai_isp_cfg] vi_pipe(%d) algo_type=%d, cfg_type=%d\n",
-					cfg.vi_pipe, cfg.ai_isp_type, cfg.ai_isp_cfg_type);
+			vi_pr(VI_INFO, "[ai_isp_cfg] vipipe(%d) algo_type=%d, cfg_type=%d\n",
+					cfg.ViPipe, cfg.ai_isp_type, cfg.ai_isp_cfg_type);
 
 			rc = ai_isp_resolve_cfg(vdev, cfg);
 			break;
@@ -9827,13 +9343,13 @@ static int sop_isp_s_ext_ctrls(
 		case VI_IOCTL_AI_ISP_SET_BUF:
 		{
 			ai_isp_api_t usr_api;
-			enum ai_isp_type_e ai_isp_type;
+			enum ai_isp_type ai_isp_type;
 
 			if (copy_from_user(&usr_api, p->ptr, sizeof(ai_isp_api_t)))
 				break;
 
 			ai_isp_type = usr_api.ai_isp_type;
-			raw_num = vi_get_raw_num_by_dev(ctx, usr_api.vi_pipe);
+			raw_num = vi_get_raw_num_by_dev(ctx, usr_api.ViPipe);
 			vi_pr(VI_DBG, "[ai_isp_set_buf] raw_num(%d) algo_type=%d\n",
 				raw_num, ai_isp_type);
 
@@ -9859,10 +9375,9 @@ static int sop_isp_s_ext_ctrls(
 	return rc;
 }
 
-int sop_isp_g_input(struct file *file, void *priv, unsigned int *i)
+int cvi_isp_g_input(struct file *file, void *priv, unsigned int *i)
 {
 	struct video_device *vdev = video_devdata(file);
-
 	WARN_ON(!vdev);
 
 	*i = get_video_index(vdev);
@@ -9872,10 +9387,9 @@ int sop_isp_g_input(struct file *file, void *priv, unsigned int *i)
 	return 0;
 }
 
-int sop_isp_s_input(struct file *file, void *priv, unsigned int i)
+int cvi_isp_s_input(struct file *file, void *priv, unsigned int i)
 {
-	struct sop_vi_dev *vdev = video_drvdata(file);
-
+	struct cvi_vi_dev *vdev = video_drvdata(file);
 	WARN_ON(!vdev);
 
 	vi_pr(VI_INFO, "no support set input:%u\n", i);
@@ -9883,7 +9397,7 @@ int sop_isp_s_input(struct file *file, void *priv, unsigned int i)
 	return 0;
 }
 
-int sop_isp_enum_input(struct file *file, void *priv, struct v4l2_input *inp)
+int cvi_isp_enum_input(struct file *file, void *priv, struct v4l2_input *inp)
 {
 	int rc = 0;
 
@@ -9893,7 +9407,7 @@ int sop_isp_enum_input(struct file *file, void *priv, struct v4l2_input *inp)
 	return rc;
 }
 
-int sop_isp_g_param(struct file *file, void *fh, struct v4l2_streamparm *a)
+int cvi_isp_g_param(struct file *file, void *fh, struct v4l2_streamparm *a)
 {
 	int rc = 0;
 	u32 numerator = 40;
@@ -9920,16 +9434,16 @@ int sop_isp_g_param(struct file *file, void *fh, struct v4l2_streamparm *a)
 	return rc;
 }
 
-int sop_isp_s_param(struct file *file, void *fh, struct v4l2_streamparm *a)
+int cvi_isp_s_param(struct file *file, void *fh, struct v4l2_streamparm *a)
 {
 	int rc = 0;
 
 	return rc;
 }
 
-static int sop_isp_s_selection(struct file *file, void *fh, struct v4l2_selection *sel)
+static int cvi_isp_s_selection(struct file *file, void *fh, struct v4l2_selection *sel)
 {
-	// struct sop_vi_dev *vdev = video_drvdata(file);
+	// struct cvi_vi_dev *vdev = video_drvdata(file);
 	int rc = -EINVAL;
 
 	switch (sel->target) {
@@ -9943,68 +9457,14 @@ static int sop_isp_s_selection(struct file *file, void *fh, struct v4l2_selectio
 	return rc;
 }
 
-static int sop_isp_enum_framesizes(struct file *file, void *priv,
-				       struct v4l2_frmsizeenum *fsize)
-{
-	struct sop_vi_dev *vdev = video_drvdata(file);
-	struct video_device *video = video_devdata(file);
-	struct isp_ctx *ctx = &vdev->ctx;
-	u8 chn_id = get_video_index(video);
-	u8 raw_num = vi_get_raw_num_by_dev(ctx, chn_id);
-
-	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
-	fsize->stepwise.min_width = ctx->isp_pipe_cfg[raw_num].post_img_w;
-	fsize->stepwise.min_height = ctx->isp_pipe_cfg[raw_num].post_img_h;
-	fsize->stepwise.max_width = ctx->isp_pipe_cfg[raw_num].csibdg_width;;
-	fsize->stepwise.max_height = ctx->isp_pipe_cfg[raw_num].csibdg_height;;
-	fsize->stepwise.step_width = 1;
-	fsize->stepwise.step_height = 1;
-
-	return 0;
-}
-
-static int sop_isp_enum_frameintervals(struct file *file, void *priv,
-		struct v4l2_frmivalenum *interval)
-{
-	struct sop_vi_dev *vdev = video_drvdata(file);
-	struct video_device *video = video_devdata(file);
-	struct isp_ctx *ctx = &vdev->ctx;
-	u8 chn_id = get_video_index(video);
-	u8 raw_num = vi_get_raw_num_by_dev(ctx, chn_id);
-	struct v4l2_subdev_frame_interval_enum fie = {
-		.index = interval->index,
-		.width = ctx->isp_pipe_cfg[raw_num].post_img_w,
-		.height = ctx->isp_pipe_cfg[raw_num].post_img_h,
-		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
-	};
-
-	if (interval->index > 0)
-		return -EINVAL;
-
-	subcall_get_frame_interval(vdev, chn_id, &fie);
-
-	interval->type = V4L2_FRMIVAL_TYPE_DISCRETE;
-	interval->discrete = fie.interval;
-
-	vi_pr(VI_INFO, "get sensor_%d denom/num(%d/%d)\n", chn_id,
-		interval->discrete.denominator, interval->discrete.numerator);
-	return 0;
-}
-
-static int sop_isp_enum_fmt_vid_cap(
+static int cvi_isp_enum_fmt_vid_cap(
 	struct file *file,
 	void  *priv,
 	struct v4l2_fmtdesc *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
-	struct video_device *vdev = video_devdata(file);
-	u8 chn_id = get_video_index(vdev);
-
-	if (f->index > 0)
-		return -EINVAL;
-
-	f->pixelformat = videv->fmt[chn_id]->fourcc;
-
+	vi_pr(VI_INFO, "+\n");
+	f->pixelformat = V4L2_PIX_FMT_YUV420;
+	// return cvi_vip_enum_fmt_vid(file, priv, f);
 	return 0;
 }
 
@@ -10018,69 +9478,75 @@ static char *v4l2_fourcc2s(u32 fourcc, char *buf)
 	return buf;
 }
 
-static int sop_isp_g_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *f)
+static int cvi_isp_g_fmt_vid_cap(
+	struct file *file,
+	void *priv,
+	struct v4l2_format *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
 	struct v4l2_pix_format *pix = &f->fmt.pix;
 	char buf[5];
 	u8 chn_id = get_video_index(vdev);
+	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 
 	WARN_ON(!vdev);
 
-	pix->width        = g_vi_ctx->chn_status[chn_id].size.width;
-	pix->height       = g_vi_ctx->chn_status[chn_id].size.height;
+	pix->width        = videv->ctx.isp_pipe_cfg[raw_num].post_img_w;
+	pix->height       = videv->ctx.isp_pipe_cfg[raw_num].post_img_h;
 	pix->field        = V4L2_FIELD_NONE;
-	pix->colorspace   = videv->pipe[chn_id].colorspace;
+	pix->pixelformat  = videv->fmt[raw_num]->fourcc;
+	pix->colorspace   = videv->pipe[raw_num].colorspace;
 	pix->xfer_func    = V4L2_XFER_FUNC_DEFAULT;
 	pix->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
 	pix->quantization = V4L2_QUANTIZATION_DEFAULT;
-	pix->bytesperline   = videv->pipe[chn_id].bytesperline[0];
+	pix->bytesperline   = videv->pipe[raw_num].bytesperline[0];
 
-	if (videv->fmt[chn_id]) {
-		pix->pixelformat  = videv->fmt[chn_id]->fourcc;
-		v4l2_fourcc2s(f->fmt.pix.pixelformat, buf);
-	}
-	vi_pr(VI_INFO, "get dev_%d w_h(%d,%d),fmt:%s\n",
-	      chn_id, f->fmt.pix.width, f->fmt.pix.height, buf);
+	v4l2_fourcc2s(f->fmt.pix.pixelformat, buf);
+	vi_pr(VI_INFO, "w_h(%d,%d),fmt:%s\n",
+		f->fmt.pix.width, f->fmt.pix.height, buf);
 
 	return 0;
 }
 
-static int sop_isp_g_fmt_vid_cap_mplane(struct file *file, void *priv, struct v4l2_format *f)
+static int cvi_isp_g_fmt_vid_cap_mplane(
+	struct file *file,
+	void *priv,
+	struct v4l2_format *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct v4l2_pix_format_mplane *mp = &f->fmt.pix_mp;
 	struct video_device *vdev = video_devdata(file);
 	unsigned int p;
 	u8 chn_id = get_video_index(vdev);
-
+	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
+	vi_pr(VI_INFO, "+\n");
 	WARN_ON(!vdev);
 
-	mp->width        = g_vi_ctx->chn_status[chn_id].size.width;
-	mp->height       = g_vi_ctx->chn_status[chn_id].size.height;
+	mp->width        = videv->ctx.isp_pipe_cfg[raw_num].post_img_w;
+	mp->height       = videv->ctx.isp_pipe_cfg[raw_num].post_img_h;
 	mp->field        = V4L2_FIELD_NONE;
-	mp->pixelformat  = videv->fmt[chn_id]->fourcc;
-	mp->colorspace   = videv->pipe[chn_id].colorspace;
+	mp->pixelformat  = videv->fmt[raw_num]->fourcc;
+	mp->colorspace   = videv->pipe[raw_num].colorspace;
 	mp->xfer_func    = V4L2_XFER_FUNC_DEFAULT;
 	mp->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
 	mp->quantization = V4L2_QUANTIZATION_DEFAULT;
-	mp->num_planes   = videv->fmt[chn_id]->buffers;
+	mp->num_planes   = videv->fmt[raw_num]->buffers;
 	for (p = 0; p < mp->num_planes; p++) {
-		mp->plane_fmt[p].bytesperline = videv->pipe[chn_id].bytesperline[p];
-		mp->plane_fmt[p].sizeimage = videv->pipe[chn_id].sizeimage[p];
+		mp->plane_fmt[p].bytesperline = videv->pipe[raw_num].bytesperline[p];
+		mp->plane_fmt[p].sizeimage = videv->pipe[raw_num].sizeimage[p];
 	}
 
 	return 0;
 }
 
-static struct sop_vip_fmt *sop_vip_get_format(u32 pixelformat)
+static struct cvi_vip_fmt *cvi_vip_get_format(u32 pixelformat)
 {
-	struct sop_vip_fmt *fmt;
+	struct cvi_vip_fmt *fmt;
 	unsigned int k;
 
-	for (k = 0; k < ARRAY_SIZE(vip_formats); k++) {
-		fmt = &vip_formats[k];
+	for (k = 0; k < ARRAY_SIZE(cvi_vip_formats); k++) {
+		fmt = &cvi_vip_formats[k];
 		if (fmt->fourcc == pixelformat)
 			return fmt;
 	}
@@ -10088,16 +9554,16 @@ static struct sop_vip_fmt *sop_vip_get_format(u32 pixelformat)
 	return NULL;
 }
 
-static int sop_vip_try_fmt_vid_mplane(struct v4l2_format *f, u8 align)
+static int cvi_vip_try_fmt_vid_mplane(struct v4l2_format *f, u8 align)
 {
 	struct v4l2_pix_format_mplane *mp = &f->fmt.pix_mp;
 	struct v4l2_plane_pix_format *pfmt = mp->plane_fmt;
-	struct sop_vip_fmt *fmt;
+	struct cvi_vip_fmt *fmt;
 	unsigned int bytesperline;
 	u8 p;
 	char buf[5];
 
-	fmt = sop_vip_get_format(mp->pixelformat);
+	fmt = cvi_vip_get_format(mp->pixelformat);
 	if (!fmt) {
 		vi_pr(VI_ERR, "fourcc(%s) unsupport.\n",
 			v4l2_fourcc2s(mp->pixelformat, buf));
@@ -10138,35 +9604,36 @@ static int sop_vip_try_fmt_vid_mplane(struct v4l2_format *f, u8 align)
 	    mp->pixelformat == V4L2_PIX_FMT_BGR24 ||
 	    mp->pixelformat == V4L2_PIX_FMT_GREY) {
 		mp->colorspace = V4L2_COLORSPACE_SRGB;
-	} else if (mp->pixelformat == V4L2_PIX_FMT_HSV24)
+	} else if ((mp->pixelformat == V4L2_PIX_FMT_HSV24)) {
 		mp->colorspace = V4L2_COLORSPACE_SRGB;
-	else
+	} else {
 		mp->colorspace = V4L2_COLORSPACE_SMPTE170M;
-
+	}
 	memset(mp->reserved, 0, sizeof(mp->reserved));
 
 	return 0;
 }
 
-static int sop_isp_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *f)
+static int cvi_isp_try_fmt_vid_cap(
+	struct file *file,
+	void *priv,
+	struct v4l2_format *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
 	struct v4l2_pix_format *pix = &f->fmt.pix;
 	u8 chn_id = get_video_index(vdev);
 	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 	u32 w, h;
 	u32 *crop_w, *crop_h;
-	char buf[5];
-
 	WARN_ON(!videv);
 
 	w = pix->width;
 	h = pix->height;
-	v4l2_fourcc2s(f->fmt.pix.pixelformat, buf);
-	vi_pr(VI_INFO, "try set fmt:%s wxh[%dx%d]\n", buf, w, h);
-
 	check_size(&w, &h);
+
+	vi_pr(VI_INFO, "try set fmt:0x%x.\n", pix->pixelformat);
+
 	crop_w = &videv->ctx.isp_pipe_cfg[raw_num].post_img_w;
 	crop_h = &videv->ctx.isp_pipe_cfg[raw_num].post_img_h;
 
@@ -10181,17 +9648,15 @@ static int sop_isp_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_fo
 		_v4l2_init_config_info(videv, chn_id, raw_num);
 	}
 
-	f->fmt.pix.sizeimage = videv->pipe[chn_id].sizeimage[0];
-
 	return 0;
 }
 
-static int sop_isp_try_fmt_vid_cap_mplane(
+static int cvi_isp_try_fmt_vid_cap_mplane(
 	struct file *file,
 	void *priv,
 	struct v4l2_format *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
 	struct v4l2_pix_format_mplane *mp = &f->fmt.pix_mp;
 	u8 chn_id = get_video_index(vdev);
@@ -10199,14 +9664,13 @@ static int sop_isp_try_fmt_vid_cap_mplane(
 	u32 w, h;
 	u32 *crop_w, *crop_h;
 	int rc;
-
 	WARN_ON(!videv);
 
 	w = mp->width;
 	h = mp->height;
 	check_size(&w, &h);
 
-	rc = sop_vip_try_fmt_vid_mplane(f, VIP_ALIGNMENT);
+	rc = cvi_vip_try_fmt_vid_mplane(f, VIP_ALIGNMENT);
 	if (rc < 0)
 		return rc;
 
@@ -10227,63 +9691,64 @@ static int sop_isp_try_fmt_vid_cap_mplane(
 	return rc;
 }
 
-static int sop_isp_s_fmt_vid_cap(struct file *file, void *priv,
+static int cvi_isp_s_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
 	struct v4l2_pix_format *pix = &f->fmt.pix;
-	struct sop_vip_fmt *fmt;
+	struct cvi_vip_fmt *fmt;
 	u8 chn_id = get_video_index(vdev);
+	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 	int rc;
 
 	WARN_ON(!vdev);
 
-	rc = sop_isp_try_fmt_vid_cap(file, priv, f);
+	rc = cvi_isp_try_fmt_vid_cap_mplane(file, priv, f);
 	if (rc < 0) {
 		vi_pr(VI_ERR, "try set fmt fail!\n");
 		return rc;
 	}
 
-	fmt = sop_vip_get_format(pix->pixelformat);
-	videv->fmt[chn_id] = fmt;
-	videv->pipe[chn_id].colorspace = pix->colorspace;
+	fmt = cvi_vip_get_format(pix->pixelformat);
+	videv->fmt[raw_num] = fmt;
+	videv->pipe[raw_num].colorspace = pix->colorspace;
 
-	calculate_sizeimage(videv, chn_id);
+	calculate_sizeimage(videv, raw_num);
 
-	vi_pr(VI_WARN, "bytesperline:%d, size:%d\n", videv->pipe[chn_id].bytesperline[0],
-			videv->pipe[chn_id].sizeimage[0] + videv->pipe[chn_id].sizeimage[1]);
+	vi_pr(VI_WARN, "bytesperline:%d, size:%d\n", videv->pipe[raw_num].bytesperline[0],
+			videv->pipe[raw_num].sizeimage[0] + videv->pipe[raw_num].sizeimage[1]);
 
 	return rc;
 }
 
-static int sop_isp_s_fmt_vid_cap_mplane(struct file *file, void *priv,
+static int cvi_isp_s_fmt_vid_cap_mplane(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
 	struct v4l2_pix_format_mplane *mp = &f->fmt.pix_mp;
 	struct v4l2_plane_pix_format *pfmt = mp->plane_fmt;
-	struct sop_vip_fmt *fmt;
+	struct cvi_vip_fmt *fmt;
 	unsigned int p;
 	int rc = 0;
 	u8 chn_id = get_video_index(vdev);
+	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 
 	WARN_ON(!vdev);
 	vi_pr(VI_INFO, "+\n");
 
-	rc = sop_isp_try_fmt_vid_cap_mplane(file, priv, f);
+	rc = cvi_isp_try_fmt_vid_cap_mplane(file, priv, f);
 
 	if (rc < 0)
 		return rc;
 
-
-	fmt = sop_vip_get_format(mp->pixelformat);
-	videv->fmt[chn_id] = fmt;
-	videv->pipe[chn_id].colorspace = mp->colorspace;
+	fmt = cvi_vip_get_format(mp->pixelformat);
+	videv->fmt[raw_num] = fmt;
+	videv->pipe[raw_num].colorspace = mp->colorspace;
 	for (p = 0; p < mp->num_planes; p++) {
-		videv->pipe[chn_id].bytesperline[p] = pfmt[p].bytesperline;
-		videv->pipe[chn_id].sizeimage[p] = pfmt[p].sizeimage;
+		videv->pipe[raw_num].bytesperline[p] = pfmt[p].bytesperline;
+		videv->pipe[raw_num].sizeimage[p] = pfmt[p].sizeimage;
 		vi_pr(VI_WARN, "bytesperline:%d, size:%d\n",
 				pfmt[p].bytesperline, pfmt[p].sizeimage);
 	}
@@ -10380,11 +9845,11 @@ static void _fill_v4l2_buffer(struct vb2_buffer *vb, void *pb)
 	}
 }
 
-int sop_isp_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
+int cvi_isp_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
-	struct sop_isp_buf *b = NULL;
+	struct cvi_isp_buf *b = NULL;
 	struct vb2_buffer *vb2_buf = NULL;
 	struct vb2_queue *vb2_q = NULL;
 	struct _isp_dqbuf_n *n = NULL;
@@ -10395,56 +9860,47 @@ int sop_isp_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
 	int timeout = 2000; // base timeout ms
 	u8 chn_id = get_video_index(vdev);
 	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
-	u32 cur_frm = videv->postraw_frame_number[raw_num] + 1;
-	bool rdy_to_dq = false;
 
 	WARN_ON(!videv);
 
 	vi_pr(VI_DBG, "dev_%d dq pipe_%d start\n", chn_id, raw_num);
 
-	if (g_vi_ctx->bypass_frm[raw_num] > videv->postraw_frame_number[raw_num])
-		timeout += g_vi_ctx->bypass_frm[raw_num] * 100;
+	if (gViCtx->bypass_frm[raw_num] > videv->postraw_frame_number[raw_num])
+		timeout += gViCtx->bypass_frm[raw_num] * 100;
 
-	spin_lock_irqsave(&videv->qbuf_lock[raw_num], flags);
-	rdy_to_dq = list_empty(&videv->dqbuf_list[raw_num]) ? 0 : 1;
-	spin_unlock_irqrestore(&videv->qbuf_lock[raw_num], flags);
+	ret = wait_event_timeout(
+		videv->isp_dq_wait_q[raw_num],
+		atomic_read(&videv->post_dq_flag[raw_num]) == 0,
+		msecs_to_jiffies(timeout));
 
-	if (!rdy_to_dq) {
-		ret = wait_event_timeout(videv->isp_dq_wait_q[raw_num],
-					 atomic_read(&videv->post_dq_flag[raw_num]) == 0,
-					 msecs_to_jiffies(timeout));
-
-		if (!ret) {
-			vi_pr(VI_ERR, "dev_%d dqbuf[%d] timeout(%d ms)\n",
-			      chn_id, cur_frm, timeout);
-			return -ETIME;
-		}
-	} else {
-		vi_pr(VI_DBG, "dev_%d dqbuf_list is ready, no need wait\n", chn_id);
+	if (!ret) {
+		vi_pr(VI_ERR, "dev_%d dqbuf[%d] timeout(%d ms)\n", chn_id,
+			videv->postraw_frame_number[raw_num] + 1, timeout);
+		return -ETIME;
 	}
 
 	atomic_set(&videv->post_dq_flag[raw_num], 1);
 
 	ktime_get_ts64(&ts);
-	spin_lock_irqsave(&dq_lock[raw_num], flags);
+	spin_lock_irqsave(&dq_lock, flags);
 	if (!list_empty(&dqbuf_q[raw_num].list)) {
 		n = list_first_entry(&dqbuf_q[raw_num].list, struct _isp_dqbuf_n, list);
 		p->flags = n->chn_id;
-		p->sequence = n->frm_num;
+		p->sequence = videv->postraw_frame_number[raw_num];
 		p->timestamp.tv_sec	= ts.tv_sec;
 		p->timestamp.tv_usec = ts.tv_nsec / 1000;
 		list_del_init(&n->list);
 		kfree(n);
 	} else {
 		vi_pr(VI_ERR, "dev_%d dqbuf_q is empty!\n", chn_id);
-		spin_unlock_irqrestore(&dq_lock[raw_num], flags);
+		spin_unlock_irqrestore(&dq_lock, flags);
 		return -1;
 	}
-	spin_unlock_irqrestore(&dq_lock[raw_num], flags);
+	spin_unlock_irqrestore(&dq_lock, flags);
 
-	spin_lock_irqsave(&videv->qbuf_lock[raw_num], flags);
+	spin_lock_irqsave(&videv->qbuf_lock, flags);
 	if (!list_empty(&videv->dqbuf_list[raw_num])) {
-		b = list_first_entry(&videv->dqbuf_list[raw_num], struct sop_isp_buf, list);
+		b = list_first_entry(&videv->dqbuf_list[raw_num], struct cvi_isp_buf, list);
 		vb2_buf = &(b->buf.vb2_buf);
 		vb2_buf->state = VB2_BUF_STATE_DEQUEUED;
 		index = vb2_buf->index;
@@ -10453,29 +9909,29 @@ int sop_isp_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
 		list_del_init(&b->list);
 	} else {
 		vi_pr(VI_ERR, "dev_%d dqbuf is empty!\n", chn_id);
-		spin_unlock_irqrestore(&videv->qbuf_lock[raw_num], flags);
+		spin_unlock_irqrestore(&videv->qbuf_lock, flags);
 		return -1;
 	}
-	spin_unlock_irqrestore(&videv->qbuf_lock[raw_num], flags);
+	spin_unlock_irqrestore(&videv->qbuf_lock, flags);
 
 	_fill_v4l2_buffer(vb2_buf, p);
 
 	vi_pr(VI_DBG, "dev_%d dqbuf at postframe[%d] vb_index[%d] done\n",
-	      chn_id, p->sequence, index);
+			chn_id, videv->postraw_frame_number[raw_num], index);
 
 	return 0;
 }
 
-int sop_isp_expbuf(struct file *file, void *priv, struct v4l2_exportbuffer *p)
+int cvi_isp_expbuf(struct file *file, void *priv, struct v4l2_exportbuffer *p)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
-	struct sop_isp_buf *sop_vb, *tmp;
+	struct cvi_isp_buf *cvi_vb, *tmp;
 	struct vb2_buffer *vb2_buf = NULL;
 	struct mem_mapping *mem_info;
 	unsigned long flags;
-	u32 match_index = 0;
-	u64 match_addr = 0;
+	uint32_t match_index = 0;
+	uint64_t match_addr = 0;
 	u8 chn_id = get_video_index(vdev);
 	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 	int i;
@@ -10483,28 +9939,24 @@ int sop_isp_expbuf(struct file *file, void *priv, struct v4l2_exportbuffer *p)
 	vi_pr(VI_INFO, "dev_%d export vb_index[%d], qbuf_num(%d)\n",
 			chn_id, p->index, videv->qbuf_num[raw_num]);
 
-	spin_lock_irqsave(&videv->qbuf_lock[raw_num], flags);
+	spin_lock_irqsave(&videv->qbuf_lock, flags);
 	// expbuf only support when target vb buffer queue in qbuf_list
-	list_for_each_entry_safe(sop_vb, tmp, &(videv->qbuf_list[raw_num]), list) {
-		vb2_buf = &(sop_vb->buf.vb2_buf);
+	list_for_each_entry_safe(cvi_vb, tmp, &(videv->qbuf_list[raw_num]), list) {
+		vb2_buf = &(cvi_vb->buf.vb2_buf);
 		match_index = vb2_buf->index;
 		if (match_index == p->index) {
 			match_addr = vb2_dma_contig_plane_dma_addr(vb2_buf, 0);
 			goto find_fd;
 		}
 	}
-	spin_unlock_irqrestore(&videv->qbuf_lock[raw_num], flags);
+	spin_unlock_irqrestore(&videv->qbuf_lock, flags);
 
-	if (mmap_dma_fd) {
-		vi_pr(VI_INFO, "qbuf unmatch, use mmap dmabuf fd:%d\n", mmap_dma_fd);
-		p->fd = mmap_dma_fd;
-		return 0;
-	}
+	vi_pr(VI_INFO, "no vb index match\n");
 
 	return -1;
 
 find_fd:
-	spin_unlock_irqrestore(&videv->qbuf_lock[raw_num], flags);
+	spin_unlock_irqrestore(&videv->qbuf_lock, flags);
 
 	for (i = 0; i < MAX_VB2_BUF_NUM; i++) {
 		mem_info = &vb2_buf_meminfo[i];
@@ -10525,60 +9977,59 @@ find_fd:
 static int isp_subscribe_event(struct v4l2_fh *fh,
 	const struct v4l2_event_subscription *sub)
 {
-	return v4l2_event_subscribe(fh, sub, ISP_NEVENTS, NULL);
+	return v4l2_event_subscribe(fh, sub, CVI_ISP_NEVENTS, NULL);
 }
 
-static const struct v4l2_ioctl_ops sop_isp_ioctl_ops = {
-	.vidioc_querycap               = sop_isp_querycap,
-	.vidioc_g_ctrl                 = sop_isp_g_ctrl,
-	.vidioc_s_ctrl                 = sop_isp_s_ctrl,
-	.vidioc_g_input                = sop_isp_g_input,
-	.vidioc_s_input                = sop_isp_s_input,
-	.vidioc_enum_input             = sop_isp_enum_input,
-	.vidioc_g_parm                 = sop_isp_g_param,
-	.vidioc_s_parm                 = sop_isp_s_param,
-	.vidioc_g_ext_ctrls            = sop_isp_g_ext_ctrls,
-	.vidioc_s_ext_ctrls            = sop_isp_s_ext_ctrls,
-	.vidioc_s_selection            = sop_isp_s_selection,
-	.vidioc_enum_framesizes        = sop_isp_enum_framesizes,
-	.vidioc_enum_frameintervals    = sop_isp_enum_frameintervals,
-	.vidioc_enum_fmt_vid_cap       = sop_isp_enum_fmt_vid_cap,
-	.vidioc_g_fmt_vid_cap          = sop_isp_g_fmt_vid_cap,
-	.vidioc_g_fmt_vid_cap_mplane   = sop_isp_g_fmt_vid_cap_mplane,
-	.vidioc_try_fmt_vid_cap        = sop_isp_try_fmt_vid_cap,
-	.vidioc_try_fmt_vid_cap_mplane = sop_isp_try_fmt_vid_cap_mplane,
-	.vidioc_s_fmt_vid_cap          = sop_isp_s_fmt_vid_cap,
-	.vidioc_s_fmt_vid_cap_mplane   = sop_isp_s_fmt_vid_cap_mplane,
+static const struct v4l2_ioctl_ops cvi_isp_ioctl_ops = {
+	.vidioc_querycap               = cvi_isp_querycap,
+	.vidioc_g_ctrl                 = cvi_isp_g_ctrl,
+	.vidioc_s_ctrl                 = cvi_isp_s_ctrl,
+	.vidioc_g_input                = cvi_isp_g_input,
+	.vidioc_s_input                = cvi_isp_s_input,
+	.vidioc_enum_input             = cvi_isp_enum_input,
+	.vidioc_g_parm                 = cvi_isp_g_param,
+	.vidioc_s_parm                 = cvi_isp_s_param,
+	.vidioc_g_ext_ctrls            = cvi_isp_g_ext_ctrls,
+	.vidioc_s_ext_ctrls            = cvi_isp_s_ext_ctrls,
+	.vidioc_s_selection            = cvi_isp_s_selection,
+	.vidioc_enum_fmt_vid_cap       = cvi_isp_enum_fmt_vid_cap,
+	.vidioc_g_fmt_vid_cap          = cvi_isp_g_fmt_vid_cap,
+	.vidioc_g_fmt_vid_cap_mplane   = cvi_isp_g_fmt_vid_cap_mplane,
+	.vidioc_try_fmt_vid_cap        = cvi_isp_try_fmt_vid_cap,
+	.vidioc_try_fmt_vid_cap_mplane = cvi_isp_try_fmt_vid_cap_mplane,
+	.vidioc_s_fmt_vid_cap          = cvi_isp_s_fmt_vid_cap,
+	.vidioc_s_fmt_vid_cap_mplane   = cvi_isp_s_fmt_vid_cap_mplane,
 	.vidioc_reqbufs                = vb2_ioctl_reqbufs,
 	.vidioc_create_bufs            = vb2_ioctl_create_bufs,
 	.vidioc_prepare_buf            = vb2_ioctl_prepare_buf,
 	.vidioc_querybuf               = vb2_ioctl_querybuf,
 	.vidioc_qbuf                   = vb2_ioctl_qbuf,
-	.vidioc_dqbuf                  = sop_isp_dqbuf,
-	.vidioc_expbuf                 = sop_isp_expbuf,
+	.vidioc_dqbuf                  = cvi_isp_dqbuf,
+	.vidioc_expbuf                 = cvi_isp_expbuf,
 	.vidioc_streamon               = vb2_ioctl_streamon,
 	.vidioc_streamoff              = vb2_ioctl_streamoff,
 	.vidioc_subscribe_event        = isp_subscribe_event,
 	.vidioc_unsubscribe_event      = v4l2_event_unsubscribe,
 };
 
-static int sop_isp_queue_setup(struct vb2_queue *vq,
-			       unsigned int *nbuffers, unsigned int *nplanes,
-			       unsigned int sizes[], struct device *alloc_devs[])
+static int cvi_isp_queue_setup(struct vb2_queue *vq,
+			      unsigned int *nbuffers, unsigned int *nplanes,
+			      unsigned int sizes[], struct device *alloc_devs[])
 {
-	struct sop_vi_dev *videv = vb2_get_drv_priv(vq);
-	struct sop_vdev_node *vnode = container_of(vq, struct sop_vdev_node, vb_q);
+	struct cvi_vi_dev *videv = vb2_get_drv_priv(vq);
+	struct cvi_vdev_node *vnode = container_of(vq, struct cvi_vdev_node, vb_q);
 	unsigned int p;
 	u8 chn_id = get_video_index(&vnode->vdev);
-	unsigned int planes = videv->fmt[chn_id]->buffers;
+	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
+	unsigned int planes = videv->fmt[raw_num]->buffers;
 
 	switch (planes) {
 	case 1:
-		sizes[0] = videv->pipe[chn_id].sizeimage[0] + videv->pipe[chn_id].sizeimage[1];
+		sizes[0] = videv->pipe[raw_num].sizeimage[0] + videv->pipe[raw_num].sizeimage[1];
 		break;
 	case 2:
-		sizes[0] = videv->pipe[chn_id].sizeimage[0];
-		sizes[1] = videv->pipe[chn_id].sizeimage[1];
+		sizes[0] = videv->pipe[raw_num].sizeimage[0];
+		sizes[1] = videv->pipe[raw_num].sizeimage[1];
 		break;
 	default:
 		vi_pr(VI_ERR, "unsupport planes:%d\n", p);
@@ -10594,25 +10045,24 @@ static int sop_isp_queue_setup(struct vb2_queue *vq,
 }
 
 
-static void sop_isp_buf_queue_vb2(struct vb2_buffer *vb)
+static void cvi_isp_buf_queue_vb2(struct vb2_buffer *vb)
 {
 	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 	struct vb2_queue *vq = vb->vb2_queue;
-	struct sop_vi_dev *videv = vb2_get_drv_priv(vq);
-	struct sop_isp_buf *qbuf = container_of(vbuf, struct sop_isp_buf, buf);
-	struct sop_vdev_node *vnode = container_of(vq, struct sop_vdev_node, vb_q);
+	struct cvi_vi_dev *videv = vb2_get_drv_priv(vq);
+	struct cvi_isp_buf *qbuf = container_of(vbuf, struct cvi_isp_buf, buf);
+	struct cvi_vdev_node *vnode = container_of(vq, struct cvi_vdev_node, vb_q);
 	u8 chn_id = get_video_index(&vnode->vdev);
 	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
-
 	WARN_ON(!videv);
 
-	sop_isp_rdy_buf_queue(videv, qbuf, raw_num);
+	cvi_isp_rdy_buf_queue(videv, qbuf, raw_num);
 
 	vi_pr(VI_DBG, "dev_%d queue vb[%d] at pipe_%d, total_buf_num[%d]\n",
 			chn_id, vb->index, raw_num, videv->qbuf_num[raw_num]);
 }
 
-static int sop_isp_buf_prepare(struct vb2_buffer *vb)
+static int cvi_isp_buf_prepare(struct vb2_buffer *vb)
 {
 	// struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
 	if (vb->type == V4L2_BUF_TYPE_VIDEO_OUTPUT &&
@@ -10624,16 +10074,17 @@ static int sop_isp_buf_prepare(struct vb2_buffer *vb)
 	return 0;
 }
 
-static int sop_isp_start_streaming(struct vb2_queue *vq, unsigned int count)
+static int cvi_isp_start_streaming(struct vb2_queue *vq, unsigned int count)
 {
-	struct sop_vi_dev *videv = vb2_get_drv_priv(vq);
-	struct sop_vdev_node *vnode = container_of(vq, struct sop_vdev_node, vb_q);
+	struct cvi_vi_dev *videv = vb2_get_drv_priv(vq);
+	struct cvi_vdev_node *vnode = container_of(vq, struct cvi_vdev_node, vb_q);
 	u8 chn_id = get_video_index(&vnode->vdev);
 	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 	int rc = 0;
 	int i;
-
 	WARN_ON(!videv);
+
+	atomic_set(&videv->is_streaming[raw_num], 1);
 
 	mutex_lock(&videv->stream_lock);
 
@@ -10641,18 +10092,16 @@ static int sop_isp_start_streaming(struct vb2_queue *vq, unsigned int count)
 
 	if (atomic_read(&videv->isp_streamon) > 1) {
 		vi_pr(VI_INFO, "dev_%d already streaming\n", chn_id);
-		atomic_set(&videv->is_streaming[raw_num], 1);
 		mutex_unlock(&videv->stream_lock);
 		return rc;
 	}
 
 	vi_pr(VI_INFO, "first_usr [dev_%d] begin to start stream\n", chn_id);
 
-	msleep(5 * g_vi_ctx->total_dev_num); //delay for all device sync ready
-
 	rc = vi_create_thread(videv, E_VI_TH_EVENT_HANDLER);
-	if (rc)
+	if (rc) {
 		vi_pr(VI_ERR, "Failed to create VI_EVENT_HANDLER thread\n");
+	}
 
 	for (i = ISP_PRERAW0; i < ISP_PRERAW_MAX; i++) {
 		if (!videv->ctx.isp_pipe_enable[i])
@@ -10667,26 +10116,23 @@ static int sop_isp_start_streaming(struct vb2_queue *vq, unsigned int count)
 
 	vi_start_streaming(videv);
 
-	atomic_set(&videv->is_streaming[raw_num], 1);
-
 	mutex_unlock(&videv->stream_lock);
 
 	return rc;
 }
 
-static void sop_isp_stop_streaming(struct vb2_queue *vq)
+static void cvi_isp_stop_streaming(struct vb2_queue *vq)
 {
-	struct sop_vi_dev *videv = vb2_get_drv_priv(vq);
-	struct sop_vdev_node *vnode = container_of(vq, struct sop_vdev_node, vb_q);
+	struct cvi_vi_dev *videv = vb2_get_drv_priv(vq);
+	struct cvi_vdev_node *vnode = container_of(vq, struct cvi_vdev_node, vb_q);
 	u8 chn_id = get_video_index(&vnode->vdev);
 	u8 raw_num = vi_get_raw_num_by_dev(&videv->ctx, chn_id);
 	u8 stream_usr;
-
 	WARN_ON(!videv);
 
 	atomic_set(&videv->is_streaming[raw_num], 0);
 
-	vi_release_vb_buffer(videv, raw_num);
+	vi_dq_vb_buffer(videv, raw_num);
 
 	mutex_lock(&videv->stream_lock);
 
@@ -10714,26 +10160,26 @@ static void sop_isp_stop_streaming(struct vb2_queue *vq)
 	mutex_unlock(&videv->stream_lock);
 }
 
-const struct vb2_ops sop_isp_qops = {
-	.queue_setup        = sop_isp_queue_setup,
-	.buf_queue          = sop_isp_buf_queue_vb2,
-	.buf_prepare        = sop_isp_buf_prepare,
+const struct vb2_ops cvi_isp_qops = {
+	.queue_setup        = cvi_isp_queue_setup,
+	.buf_queue          = cvi_isp_buf_queue_vb2,
+	.buf_prepare        = cvi_isp_buf_prepare,
 	.wait_prepare       = vb2_ops_wait_prepare,
 	.wait_finish        = vb2_ops_wait_finish,
-	.start_streaming    = sop_isp_start_streaming,
-	.stop_streaming     = sop_isp_stop_streaming,
+	.start_streaming    = cvi_isp_start_streaming,
+	.stop_streaming     = cvi_isp_stop_streaming,
 };
 
 /*************************************************************************
  *	FOPS definition
  *************************************************************************/
-static int sop_isp_open(struct file *file)
+static int cvi_isp_open(struct file *file)
 {
 	int rc = 0;
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
-	struct sop_isp_device *dev =
-		container_of(videv, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(videv, struct cvi_isp_device, vi_dev);
 	u8 chn_id = get_video_index(vdev);
 	u8 raw_num = ISP_PRERAW_MAX;
 	u8 open_cnt;
@@ -10773,8 +10219,8 @@ static int sop_isp_open(struct file *file)
 			if (!dev->sensors[i].sd)
 				continue;
 
-			g_vi_ctx->is_dev_enable[i] = true;
-			g_vi_ctx->total_dev_num++;
+			gViCtx->isDevEnable[i] = true;
+			gViCtx->total_dev_num++;
 
 			_subdev_init(videv, i, &raw_num);
 
@@ -10782,7 +10228,7 @@ static int sop_isp_open(struct file *file)
 
 			_v4l2_init_config_info(videv, i, raw_num);
 
-			vi_mac_clk_ctrl(videv, videv->ctx.isp_bind_info[i].bind_fe_num, true);
+			vi_mac_clk_ctrl(videv, raw_num, true);
 		}
 	}
 
@@ -10795,12 +10241,12 @@ static int sop_isp_open(struct file *file)
 	return rc;
 }
 
-static int sop_isp_release(struct file *file)
+static int cvi_isp_release(struct file *file)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
-	struct sop_isp_device *dev =
-		container_of(videv, struct sop_isp_device, vi_dev);
+	struct cvi_isp_device *dev =
+		container_of(videv, struct cvi_isp_device, vi_dev);
 	struct vb2_queue *vb_q;
 	u8 chn_id = get_video_index(vdev);
 	u8 raw_num;
@@ -10824,7 +10270,12 @@ static int sop_isp_release(struct file *file)
 	vi_pr(VI_INFO, "release video%d\n", chn_id);
 
 	if (atomic_read(&videv->open_dev_cnt) == 0) {
-		g_vi_ctx->total_dev_num = 0;
+#ifndef FPGA_PORTING
+		_vi_clk_ctrl(videv, false);
+#endif
+		_vi_sdk_release(videv);
+
+		gViCtx->total_dev_num = 0;
 
 		for (i = 0; i < MAX_SENSOR_NUM; i++) {
 			if (!dev->sensors[i].sd)
@@ -10832,16 +10283,11 @@ static int sop_isp_release(struct file *file)
 			vb_q = &videv->vnode[i].vb_q;
 			if (vb2_is_streaming(vb_q))
 				vb2_streamoff(vb_q, vb_q->type);
-
-			g_vi_ctx->is_dev_enable[i] = false;
-			raw_num = videv->ctx.isp_bind_info[i].bind_fe_num;
+			gViCtx->isDevEnable[i] = false;
+			raw_num = vi_get_raw_num_by_dev(&videv->ctx, i);
 			vi_mac_clk_ctrl(videv, raw_num, false);
-			vi_pr(VI_INFO, "close dev_%d, fe_pipe_%d\n", i, raw_num);
+			vi_pr(VI_INFO, "close vi_%d, pipe_%d\n", i, raw_num);
 		}
-
-		_vi_clk_ctrl(videv, false);
-
-		_vi_sdk_release(videv);
 
 		subcall_open(videv, false);
 	}
@@ -10855,9 +10301,9 @@ static int sop_isp_release(struct file *file)
 	return 0;
 }
 
-static __poll_t sop_isp_poll(struct file *file, poll_table *wait)
+static __poll_t cvi_isp_poll(struct file *file, poll_table *wait)
 {
-	struct sop_vi_dev *videv = video_drvdata(file);
+	struct cvi_vi_dev *videv = video_drvdata(file);
 	struct video_device *vdev = video_devdata(file);
 	struct vb2_queue *q = vdev->queue;
 	struct mutex *lock = q->lock ? q->lock : vdev->lock;
@@ -10903,11 +10349,11 @@ static __poll_t sop_isp_poll(struct file *file, poll_table *wait)
 	return res;
 }
 
-static struct v4l2_file_operations sop_isp_fops = {
+static struct v4l2_file_operations cvi_isp_fops = {
 	.owner          = THIS_MODULE,
-	.open           = sop_isp_open,
-	.release        = sop_isp_release,
-	.poll           = sop_isp_poll,
+	.open           = cvi_isp_open,
+	.release        = cvi_isp_release,
+	.poll           = cvi_isp_poll,
 	.mmap           = vb2_fop_mmap,
 	.unlocked_ioctl = video_ioctl2,
 #ifdef CONFIG_COMPAT
@@ -10917,7 +10363,7 @@ static struct v4l2_file_operations sop_isp_fops = {
 
 static irqreturn_t vi_core_isr(int irq, void *priv)
 {
-	struct sop_vi_dev *vdev = priv;
+	struct cvi_vi_dev *vdev = priv;
 
 	vi_irq_handler(vdev);
 
@@ -10925,7 +10371,7 @@ static irqreturn_t vi_core_isr(int irq, void *priv)
 }
 
 #ifndef FPGA_PORTING
-static int vi_core_clk_init(struct sop_vi_dev *videv)
+static int vi_core_clk_init(struct cvi_vi_dev *videv)
 {
 	u8 i = 0;
 
@@ -10958,7 +10404,7 @@ static int vi_core_clk_init(struct sop_vi_dev *videv)
 #endif
 
 #ifdef VI_MEM_BM_ION
-static const struct dma_map_ops vb2_dma_ops = {
+static struct dma_map_ops vb2_dma_ops = {
 	.alloc = v4l2_vb_dma_alloc,
 	.free  = v4l2_vb_dma_free,
 	.mmap  = v4l2_vb_dma_mmap,
@@ -10967,8 +10413,8 @@ static const struct dma_map_ops vb2_dma_ops = {
 
 int vi_core_init(struct platform_device *pdev)
 {
-	struct sop_isp_device *isp_dev;
-	struct sop_vi_dev *videv;
+	struct cvi_isp_device *isp_dev;
+	struct cvi_vi_dev *videv;
 	struct resource *res;
 	int ret = 0;
 
@@ -10980,7 +10426,7 @@ int vi_core_init(struct platform_device *pdev)
 
 	videv = &isp_dev->vi_dev;
 	videv->dev = &pdev->dev;
-	g_videv = videv;
+	gvidev = videv;
 #ifdef VI_MEM_BM_ION
 	videv->dev->dma_ops = &vb2_dma_ops;
 #endif
@@ -10992,7 +10438,7 @@ int vi_core_init(struct platform_device *pdev)
 	/* ISP IP register base address */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	videv->reg_base = devm_ioremap_resource(&pdev->dev, res);
-	vi_pr(VI_INFO, "res-reg[0]: start: 0x%llx, end: 0x%llx, virt-addr(%p).\n",
+	vi_pr(VI_INFO, "res-reg[0]: start: 0x%llx, end: 0x%llx, virt-addr(%px).\n",
 			res->start, res->end, videv->reg_base);
 	if (IS_ERR(videv->reg_base)) {
 		ret = PTR_ERR(videv->reg_base);
@@ -11007,13 +10453,13 @@ int vi_core_init(struct platform_device *pdev)
 			res->start, res->end, sys_base_address);
 
 	/* Interrupt */
-	videv->irq_num = platform_get_irq_byname(pdev, ISP_IRQ_NAME);
+	videv->irq_num = platform_get_irq_byname(pdev, CVI_ISP_IRQ_NAME);
 	if (videv->irq_num < 0) {
-		dev_err(&pdev->dev, "No IRQ resource for [%s]\n", ISP_IRQ_NAME);
+		dev_err(&pdev->dev, "No IRQ resource for [%s]\n", CVI_ISP_IRQ_NAME);
 		return -ENODEV;
 	}
 	vi_pr(VI_INFO, "irq(%d) for %s get from platform driver(%s).\n",
-			videv->irq_num, ISP_IRQ_NAME, pdev->name);
+			videv->irq_num, CVI_ISP_IRQ_NAME, pdev->name);
 
 #ifndef FPGA_PORTING
 	ret = vi_core_clk_init(videv);
@@ -11033,7 +10479,7 @@ int vi_core_init(struct platform_device *pdev)
 		goto err;
 	}
 
-	g_vi_ctx = (struct sop_vi_ctx *)videv->shared_mem;
+	gViCtx = (struct cvi_vi_ctx *)videv->shared_mem;
 
 	_vi_init_param(videv);
 
@@ -11067,12 +10513,6 @@ int vi_core_init(struct platform_device *pdev)
 	// init device dma mask
 	dma_set_mask_and_coherent(videv->dev, DMA_BIT_MASK(64));
 
-	videv->ddr_retrain_reg = ioremap(VI_DDR_RETRAIN_REG, 0x4);
-	if (!videv->ddr_retrain_reg) {
-		vi_pr(VI_ERR, "Failed to ioremap ddr_retrain_reg\n");
-		goto err;
-	}
-
 	vi_pr(VI_INFO, "done\n");
 
 err:
@@ -11080,7 +10520,7 @@ err:
 	return ret;
 }
 
-int vi_core_deinit(struct sop_vi_dev *videv)
+int vi_core_deinit(struct cvi_vi_dev *videv)
 {
 	int ret = 0;
 	int i;
@@ -11101,8 +10541,6 @@ int vi_core_deinit(struct sop_vi_dev *videv)
 
 	tasklet_kill(&videv->job_work);
 
-	iounmap(videv->ddr_retrain_reg);
-
 	vi_pr(VI_INFO, "-\n");
 
 	return ret;
@@ -11111,32 +10549,34 @@ int vi_core_deinit(struct sop_vi_dev *videv)
 /*******************************************************
  *  Common interface for core
  ******************************************************/
-int vi_register_video_device(struct sop_isp_device *isp_dev)
+int vi_register_video_device(struct cvi_isp_device *isp_dev)
 {
-	struct sop_vi_dev *videv;
+	int rc = 0;
+	struct cvi_vi_dev *videv;
 	struct video_device *vfd;
 	struct vb2_queue *q;
 	struct mutex *vd_lock;
 	struct mutex *vq_lock;
-	int dev_num = 0;
-	int rc = 0;
 
 	videv = &isp_dev->vi_dev;
 	videv->vid_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-	dev_num = videv->num_dev;
-	q = &videv->vnode[dev_num].vb_q;
-	vd_lock = &videv->vnode[dev_num].vlock;
-	vq_lock = &videv->vq_lock[dev_num];
+	q = &videv->vnode[videv->num_dev].vb_q;
+	vd_lock = &videv->vnode[videv->num_dev].vlock;
+	vq_lock = &videv->vq_lock[videv->num_dev];
 
 	mutex_init(vd_lock);
 	mutex_init(vq_lock);
 
-	vfd = &videv->vnode[dev_num].vdev;
-	snprintf(vfd->name, sizeof(vfd->name), "sop-isp%d", dev_num);
-	vfd->fops = &sop_isp_fops;
-	vfd->ioctl_ops = &sop_isp_ioctl_ops;
+	vfd = &videv->vnode[videv->num_dev].vdev;
+	snprintf(vfd->name, sizeof(vfd->name), "cvi-isp%d", videv->num_dev);
+	vfd->fops = &cvi_isp_fops;
+	vfd->ioctl_ops = &cvi_isp_ioctl_ops;
 	vfd->vfl_dir = VFL_DIR_RX;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
 	vfd->vfl_type = VFL_TYPE_VIDEO;
+#else
+	vfd->vfl_type = VFL_TYPE_GRABBER;
+#endif
 	vfd->minor = -1;
 	vfd->device_caps = videv->vid_caps;
 	vfd->release = video_device_release_empty;
@@ -11146,13 +10586,13 @@ int vi_register_video_device(struct sop_isp_device *isp_dev)
 
 	// vb2_queue init
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	q->io_modes = VB2_MMAP | VB2_DMABUF;
-	q->buf_struct_size = sizeof(struct sop_isp_buf);
+	q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF | VB2_READ;
+	q->buf_struct_size = sizeof(struct cvi_isp_buf);
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	q->min_buffers_needed = 0;
 	q->drv_priv = videv;
 	q->dev = isp_dev->v4l2_dev.dev;
-	q->ops = &sop_isp_qops;
+	q->ops = &cvi_isp_qops;
 	q->lock = vq_lock;
 	q->mem_ops = &vb2_dma_contig_memops;
 	rc = vb2_queue_init(q);
@@ -11161,8 +10601,11 @@ int vi_register_video_device(struct sop_isp_device *isp_dev)
 		return rc;
 	}
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
 	rc = video_register_device(vfd, VFL_TYPE_VIDEO, -1);
-
+#else
+	rc = video_register_device(vfd, VFL_TYPE_GRABBER, -1);
+#endif
 	if (rc) {
 		vi_pr(VI_ERR, "Failed to register vi device\n");
 		goto err_register;
@@ -11183,9 +10626,9 @@ err_register:
 	return rc;
 }
 
-int vi_destroy_instance(struct sop_isp_device *isp_dev)
+int vi_destroy_instance(struct cvi_isp_device *isp_dev)
 {
-	struct sop_vi_dev *videv = &isp_dev->vi_dev;
+	struct cvi_vi_dev *videv = &isp_dev->vi_dev;
 	struct video_device *vfd;
 	int i;
 

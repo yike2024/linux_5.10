@@ -2,7 +2,6 @@
 #include <linux/version.h>
 #include <proc/vi_isp_proc.h>
 
-#define NO_PROC_ISP
 #define ISP_PRC_NAME		"v4l2/isp"
 #define PROC_READ_TIMEOUT	1000
 
@@ -17,7 +16,7 @@ struct isp_prc_ctrl {
  *	ISP proc functions
  *************************************************************************/
 
-int isp_proc_set_proc_content(void *buffer, size_t count)
+int isp_proc_setProcContent(void *buffer, size_t count)
 {
 	unsigned long flags;
 	ssize_t rc = count;
@@ -65,7 +64,7 @@ static int _isp_proc_show(struct seq_file *m, void *v)
 
 static int _isp_proc_open(struct inode *inode, struct file *file)
 {
-	struct sop_vi_dev *vdev = PDE_DATA(inode);
+	struct cvi_vi_dev *vdev = PDE_DATA(inode);
 
 	isp_prc_unit.isp_prc_int_flag = 0;
 	vi_event_queue(vdev, VI_EVENT_ISP_PROC_READ, 0);
@@ -89,10 +88,10 @@ static const struct file_operations _isp_proc_fops = {
 	.release = single_release,
 };
 #endif
-int isp_proc_init(struct sop_vi_dev *_vdev)
+int isp_proc_init(struct cvi_vi_dev *_vdev)
 {
 	int rc = 0;
-#ifndef NO_PROC_ISP
+
 	/* create the /proc file */
 	if (proc_create_data(ISP_PRC_NAME, 0644, NULL, &_isp_proc_fops, _vdev) == NULL) {
 		pr_err("isp proc creation failed\n");
@@ -102,17 +101,16 @@ int isp_proc_init(struct sop_vi_dev *_vdev)
 	isp_prc_unit.isp_prc_int_flag = 0;
 	init_waitqueue_head(&isp_prc_unit.isp_prc_wait_q);
 	spin_lock_init(&isp_prc_unit.isp_proc_lock);
-#endif
+
 	return rc;
 }
 
 int isp_proc_remove(void)
 {
-#ifndef NO_PROC_ISP
 	if (isp_prc_unit.isp_buff_str != NULL)
 		kfree(isp_prc_unit.isp_buff_str);
 
 	remove_proc_entry(ISP_PRC_NAME, NULL);
-#endif
+
 	return 0;
 }

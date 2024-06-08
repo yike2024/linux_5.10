@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: BSD
 #include <vi_isp_buf_ctrl.h>
 
 spinlock_t buf_lock;

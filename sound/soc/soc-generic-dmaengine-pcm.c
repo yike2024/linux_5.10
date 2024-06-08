@@ -20,11 +20,11 @@
  * bytes that are still left to transfer.
  */
 #define SND_DMAENGINE_PCM_FLAG_NO_RESIDUE BIT(31)
-#define PERIOD_BYTE_MAX (1024 * 4 * 13)
-#define BUFFER_BYTE_MAX (1024 * 4 * 40)
+#define PERIOD_BYTE_MAX 1024 * 4 * 13
+#define BUFFER_BYTE_MAX 1024 * 4 * 40
 
 static struct device *dmaengine_dma_dev(struct dmaengine_pcm *pcm,
-					struct snd_pcm_substream *substream)
+	struct snd_pcm_substream *substream)
 {
 	if (!pcm->chan[substream->stream])
 		return NULL;
@@ -46,8 +46,7 @@ static struct device *dmaengine_dma_dev(struct dmaengine_pcm *pcm,
  * remaining fields based on the DAI DMA data.
  */
 int snd_dmaengine_pcm_prepare_slave_config(struct snd_pcm_substream *substream,
-					   struct snd_pcm_hw_params *params,
-					   struct dma_slave_config *slave_config)
+	struct snd_pcm_hw_params *params, struct dma_slave_config *slave_config)
 {
 	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
 	struct snd_dmaengine_dai_dma_data *dma_data;
@@ -66,7 +65,7 @@ int snd_dmaengine_pcm_prepare_slave_config(struct snd_pcm_substream *substream,
 		return ret;
 
 	snd_dmaengine_pcm_set_config_from_dai_data(substream, dma_data,
-						   slave_config);
+		slave_config);
 
 	return 0;
 }
@@ -79,8 +78,8 @@ static int dmaengine_pcm_hw_params(struct snd_soc_component *component,
 	struct dmaengine_pcm *pcm = soc_component_to_pcm(component);
 	struct dma_chan *chan = snd_dmaengine_pcm_get_chan(substream);
 	int (*prepare_slave_config)(struct snd_pcm_substream *substream,
-				    struct snd_pcm_hw_params *params,
-				    struct dma_slave_config *slave_config);
+			struct snd_pcm_hw_params *params,
+			struct dma_slave_config *slave_config);
 	struct dma_slave_config slave_config;
 	int ret;
 
@@ -179,9 +178,10 @@ static int dmaengine_pcm_trigger(struct snd_soc_component *component,
 	return snd_dmaengine_pcm_trigger(substream, cmd);
 }
 
-static struct dma_chan *dmaengine_pcm_compat_request_channel(struct snd_soc_component *component,
-							     struct snd_soc_pcm_runtime *rtd,
-							     struct snd_pcm_substream *substream)
+static struct dma_chan *dmaengine_pcm_compat_request_channel(
+	struct snd_soc_component *component,
+	struct snd_soc_pcm_runtime *rtd,
+	struct snd_pcm_substream *substream)
 {
 	struct dmaengine_pcm *pcm = soc_component_to_pcm(component);
 	struct snd_dmaengine_dai_dma_data *dma_data;
@@ -208,7 +208,7 @@ static struct dma_chan *dmaengine_pcm_compat_request_channel(struct snd_soc_comp
 }
 
 static bool dmaengine_pcm_can_report_residue(struct device *dev,
-					     struct dma_chan *chan)
+	struct dma_chan *chan)
 {
 	struct dma_slave_caps dma_caps;
 	int ret;
@@ -252,11 +252,11 @@ static int dmaengine_pcm_new(struct snd_soc_component *component,
 
 		if (!pcm->chan[i] && config && config->chan_names[i])
 			pcm->chan[i] = dma_request_slave_channel(dev,
-								 config->chan_names[i]);
+				config->chan_names[i]);
 
 		if (!pcm->chan[i] && (pcm->flags & SND_DMAENGINE_PCM_FLAG_COMPAT)) {
-			pcm->chan[i] = dmaengine_pcm_compat_request_channel(component,
-									    rtd, substream);
+			pcm->chan[i] = dmaengine_pcm_compat_request_channel(
+				component, rtd, substream);
 		}
 
 		if (!pcm->chan[i]) {
@@ -266,10 +266,10 @@ static int dmaengine_pcm_new(struct snd_soc_component *component,
 		}
 
 		snd_pcm_set_managed_buffer(substream,
-					   SNDRV_DMA_TYPE_DEV_IRAM,
-					   dmaengine_dma_dev(pcm, substream),
-					   prealloc_buffer_size,
-					   max_buffer_size);
+				SNDRV_DMA_TYPE_DEV_IRAM,
+				dmaengine_dma_dev(pcm, substream),
+				prealloc_buffer_size,
+				max_buffer_size);
 
 		if (!dmaengine_pcm_can_report_residue(dev, pcm->chan[i]))
 			pcm->flags |= SND_DMAENGINE_PCM_FLAG_NO_RESIDUE;
@@ -284,8 +284,9 @@ static int dmaengine_pcm_new(struct snd_soc_component *component,
 	return 0;
 }
 
-static snd_pcm_uframes_t dmaengine_pcm_pointer(struct snd_soc_component *component,
-					       struct snd_pcm_substream *substream)
+static snd_pcm_uframes_t dmaengine_pcm_pointer(
+	struct snd_soc_component *component,
+	struct snd_pcm_substream *substream)
 {
 	struct dmaengine_pcm *pcm = soc_component_to_pcm(component);
 
@@ -356,14 +357,14 @@ static const char * const dmaengine_pcm_dma_channel_names[] = {
 };
 
 static int dmaengine_pcm_request_chan_of(struct dmaengine_pcm *pcm,
-					 struct device *dev, const struct snd_dmaengine_pcm_config *config)
+	struct device *dev, const struct snd_dmaengine_pcm_config *config)
 {
 	unsigned int i;
 	const char *name;
 	struct dma_chan *chan;
 
-	if ((pcm->flags & SND_DMAENGINE_PCM_FLAG_NO_DT) ||
-	    (!dev->of_node && !(config && config->dma_dev && config->dma_dev->of_node)))
+	if ((pcm->flags & SND_DMAENGINE_PCM_FLAG_NO_DT) || (!dev->of_node &&
+	    !(config && config->dma_dev && config->dma_dev->of_node)))
 		return 0;
 
 	if (config && config->dma_dev) {
@@ -428,8 +429,7 @@ static void dmaengine_pcm_release_chan(struct dmaengine_pcm *pcm)
  * @flags: Platform specific quirks
  */
 int snd_dmaengine_pcm_register(struct device *dev,
-			       const struct snd_dmaengine_pcm_config *config,
-			       unsigned int flags)
+	const struct snd_dmaengine_pcm_config *config, unsigned int flags)
 {
 	const struct snd_soc_component_driver *driver;
 	struct dmaengine_pcm *pcm;

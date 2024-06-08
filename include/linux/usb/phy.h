@@ -135,7 +135,7 @@ struct usb_phy {
 
 	/* effective for B devices, ignored for A-peripheral */
 	int	(*set_power)(struct usb_phy *x,
-				unsigned int mA);
+				unsigned mA);
 
 	/* Set phy into suspend mode */
 	int	(*set_suspend)(struct usb_phy *x,
@@ -289,7 +289,7 @@ static inline void usb_phy_set_charger_state(struct usb_phy *usb_phy,
 #endif
 
 static inline int
-usb_phy_set_power(struct usb_phy *x, unsigned int mA)
+usb_phy_set_power(struct usb_phy *x, unsigned mA)
 {
 	if (!x)
 		return 0;

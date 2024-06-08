@@ -28,13 +28,6 @@ static void dwmac4_core_init(struct mac_device_info *hw,
 
 	value |= GMAC_CORE_INIT;
 
-	value &= ~GMAC_CONFIG_2K;
-	value &= ~GMAC_CONFIG_JE;
-	if (dev->mtu > 1500)
-		value |= GMAC_CONFIG_2K;
-	if (dev->mtu > 2000)
-		value |= GMAC_CONFIG_JE;
-
 	if (hw->ps) {
 		value |= GMAC_CONFIG_TE;
 

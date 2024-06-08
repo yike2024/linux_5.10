@@ -1,13 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*******************************************************************************
- *
- *  Header file for stmmac platform data
- *
- *  Copyright (C) 2009  STMicroelectronics Ltd
- *
- *
- *  Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
- ******************************************************************************/
+
+  Header file for stmmac platform data
+
+  Copyright (C) 2009  STMicroelectronics Ltd
+
+
+  Author: Giuseppe Cavallaro <peppe.cavallaro@st.com>
+*******************************************************************************/
 
 #ifndef __STMMAC_PLATFORM_DATA
 #define __STMMAC_PLATFORM_DATA
@@ -25,8 +25,7 @@
 
 /* Define the macros for CSR clock range parameters to be passed by
  * platform code.
- * This could also be configured at run time using CPU freq framework.
- */
+ * This could also be configured at run time using CPU freq framework. */
 
 /* MDC Clock Selection define*/
 #define	STMMAC_CSR_60_100M	0x0	/* MDC = clk_scr_i/42 */

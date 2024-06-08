@@ -30,7 +30,7 @@ unsigned int vi_poll(struct file *filp, struct poll_table_struct *wait);
 /*******************************************************
  *  Common interface for core
  ******************************************************/
-void vi_irq_handler(struct sop_vi_dev *vdev);
+void vi_irq_handler(struct cvi_vi_dev *vdev);
 int vi_create_instance(struct platform_device *pdev);
 int vi_destroy_instance(struct platform_device *pdev);
 

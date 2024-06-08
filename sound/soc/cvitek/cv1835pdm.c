@@ -38,6 +38,7 @@ static int cv1835pdm_set_dai_fmt(struct snd_soc_dai *dai,
 	if (!pdm->dev)
 		dev_err(pdm->dev, "dev is NULL\n");
 
+
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 	case SND_SOC_DAIFMT_CBM_CFM:
 		dev_dbg(pdm->dev, "set PDM to MASTER mode\n");

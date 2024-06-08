@@ -183,7 +183,6 @@ static int cvitek_drm_bind(struct device *dev)
 	}
 
 	/* vblank init */
-	drm->irq_enabled = true;
 	ret = drm_vblank_init(drm, drm->mode_config.num_crtc);
 	if (ret) {
 		drm_err(drm, "failed to initialize vblank.\n");

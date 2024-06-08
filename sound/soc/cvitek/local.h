@@ -62,6 +62,7 @@
 #define I2S_TDM_MULTI_SYNC	0x020
 #define I2S_BCLK_OEN_SEL	0x030
 
+
 /* define value of each configuration of register BLK_MODE_SETTING */
 #define RX_MODE	            (0x0 << 0)
 #define TX_MODE             (0x1 << 0)
@@ -91,14 +92,15 @@
 #define FS_IDEF_MASK        0x00004000
 #define FS_ACT_LENGTH_MASK  0x00FF0000
 #define FRAME_LENGTH_MASK   0x000001FF
-#define FRAME_LENGTH(l)     ((((l) - 1) << 0) & FRAME_LENGTH_MASK) /* frame length between 0~511 = 1~512 bits */
+#define FRAME_LENGTH(l)     (((l-1) << 0) & FRAME_LENGTH_MASK) /* frame length between 0~511 = 1~512 bits */
 #define FS_ACT_LOW          (0x0 << 12)
 #define FS_ACT_HIGH         (0x1 << 12)
 #define NO_FS_OFFSET        (0x0 << 13)
 #define FS_OFFSET_1_BIT     (0x1 << 13)
 #define FS_IDEF_FRAME_SYNC	(0x0 << 14) /* frame sync*/
 #define FS_IDEF_CH_SYNC		(0x1 << 14) /* channel sync */
-#define FS_ACT_LENGTH(l)    ((((l) - 1) << 16) & FS_ACT_LENGTH_MASK) /* frame active length between 0~255 = 1~256 bits*/
+#define FS_ACT_LENGTH(l)    (((l-1) << 16) & FS_ACT_LENGTH_MASK) /* frame active length between 0~255 = 1~256 bits*/
+
 
 /* define value of each configuration of register SLOT_SETTING1 */
 
@@ -106,10 +108,10 @@
 #define SLOT_SIZE_MASK      0x00003F00
 #define DATA_SIZE_MASK      0x001F0000
 #define FB_OFFSET_MASK      0x1F000000
-#define SLOT_NUM(l)         ((((l) - 1) << 0) & SLOT_NUM_MASK)
-#define SLOT_SIZE(l)        ((((l) - 1) << 8) & SLOT_SIZE_MASK)
-#define DATA_SIZE(l)        ((((l) - 1) << 16) & DATA_SIZE_MASK)
-#define FB_OFFSET(l)        (((l) << 24) & FB_OFFSET_MASK)
+#define SLOT_NUM(l)         (((l-1) << 0) & SLOT_NUM_MASK)
+#define SLOT_SIZE(l)        (((l-1) << 8) & SLOT_SIZE_MASK)
+#define DATA_SIZE(l)        (((l-1) << 16) & DATA_SIZE_MASK)
+#define FB_OFFSET(l)        ((l << 24) & FB_OFFSET_MASK)
 
 /* define value of each configuration of register DATA_FORMAT */
 #define WORD_LENGTH_MASK    (0x3 << 1)
@@ -148,9 +150,9 @@
 #define RX_FIFO_THRESHOLD_MASK  0x0000001F
 #define TX_FIFO_THRESHOLD_MASK  0x001F0000
 #define TX_FIFO_HIGH_THRESHOLD_MASK  0x1F000000
-#define RX_FIFO_THRESHOLD(v)    (((v) << 0) & RX_FIFO_THRESHOLD_MASK)
-#define TX_FIFO_THRESHOLD(v)    (((v) << 16) & TX_FIFO_THRESHOLD_MASK)
-#define TX_FIFO_HIGH_THRESHOLD(v)    (((v) << 24) & TX_FIFO_HIGH_THRESHOLD_MASK)
+#define RX_FIFO_THRESHOLD(v)    ((v << 0) & RX_FIFO_THRESHOLD_MASK)
+#define TX_FIFO_THRESHOLD(v)    ((v << 16) & TX_FIFO_THRESHOLD_MASK)
+#define TX_FIFO_HIGH_THRESHOLD(v)    ((v << 24) & TX_FIFO_HIGH_THRESHOLD_MASK)
 
 /* define value of each configuration of register FIFO_RESET */
 #define RX_FIFO_RESET_PULL_UP 0x00000001
@@ -175,13 +177,17 @@
 #define BCLK_OUT_FORCE_EN	(0x1 << 6)
 
 /* define value of each configuration of register CLK_CTRL1 */
-#define MCLK_DIV(l)             (((l) << 0) & 0x0000FFFF)
-#define BCLK_DIV(l)             (((l) << 16) & 0xFFFF0000)
+#define MCLK_DIV(l)             ((l << 0) & 0x0000FFFF)
+#define BCLK_DIV(l)             ((l << 16) & 0xFFFF0000)
+
 
 #define FMT_IB_NF    0x0  /* sample at falling edge and sync polarity is active low*/
 #define FMT_IB_IF    0x1
 #define FMT_NB_NF    0x2
 #define FMT_NB_IF    0x3
+
+
+
 
 #define I2S_ON	0x1
 #define I2S_OFF 0x0
@@ -198,6 +204,8 @@
 #define WSS_24_CLKCYCLE   0x30
 #define WSS_32_CLKCYCLE   0x40
 #define WSS_256_CLKCYCLE  0x200
+
+
 
 union cvi_i2s_snd_dma_data {
 	struct i2s_dma_data pd;
@@ -302,8 +310,8 @@ struct cvi_i2s_dev {
 
 	struct snd_pcm_substream __rcu *tx_substream;
 	unsigned int (*tx_fn)(struct cvi_i2s_dev *dev,
-			      struct snd_pcm_runtime *runtime, unsigned int tx_ptr,
-			      bool *period_elapsed);
+			struct snd_pcm_runtime *runtime, unsigned int tx_ptr,
+			bool *period_elapsed);
 	unsigned int tx_ptr;
 	bool mclk_out;
 #ifdef CONFIG_PM_SLEEP

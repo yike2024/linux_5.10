@@ -1,5 +1,5 @@
-#ifndef _CMDQ_H_
-#define _CMDQ_H_
+#ifndef _CVI_CMDQ_H_
+#define _CVI_CMDQ_H_
 
 #include <stdbool.h>
 //#include <common.h>
@@ -62,13 +62,13 @@ union cmdq_set {
 };
 
 /**
- * cmdq_set_package  - package reg_write to cmd_set.
+ * cmdQ_set_package  - package reg_write to cmd_set.
  *
  */
-void cmdq_set_package(struct cmdq_set_reg *set, u32 addr, u32 data);
+void cmdQ_set_package(struct cmdq_set_reg *set, u32 addr, u32 data);
 
 /**
- * cmdq_set_package  - package reg_write to cmd_set.
+ * cmdQ_set_package  - package reg_write to cmd_set.
  *
  * @param set: the set to modify
  * @param is_timer: 1: wait_timer, 0: wait_flag
@@ -76,10 +76,10 @@ void cmdq_set_package(struct cmdq_set_reg *set, u32 addr, u32 data);
  *		counter if timer and flag_num if flag
  * @param intr: the interrupt condition
  */
-void cmdq_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr);
+void cmdQ_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr);
 
 /**
- * cmdq_adma_package  - package adma entries.
+ * cmdQ_adma_package  - package adma entries.
  *
  * @param item: adma entry to modify
  * @param addr: address of link/cmd_set
@@ -87,36 +87,36 @@ void cmdq_set_wait(union cmdq_set *set, bool is_timer, u32 data, u8 intr);
  * @param is_link: 1: link descriptor, 2: cmd_set
  * @param is_end: true if this is last entry in adma-table.
  */
-void cmdq_adma_package(struct cmdq_adma *item, u64 addr, u32 size, bool is_link,
+void cmdQ_adma_package(struct cmdq_adma *item, u64 addr, u32 size, bool is_link,
 		bool is_end);
 
 /**
- * cmdq_intr_ctrl - cmdQ's interrupt on(1)/off(0)
+ * cmdQ_intr_ctrl - cmdQ's interrupt on(1)/off(0)
  *                 bit0: cmdQ intr, bit1: cmdQ end, bit2: cmdQ wait
  *
  * @param intr_mask: On/Off ctrl of the interrupt.
  */
-void cmdq_intr_ctrl(uintptr_t base, u8 intr_mask);
+void cmdQ_intr_ctrl(uintptr_t base, u8 intr_mask);
 
 /**
- * cmdq_intr_ctrl - clear cmdQ's interrupt
+ * cmdQ_intr_ctrl - clear cmdQ's interrupt
  *                 bit0: cmdQ intr, bit1: cmdQ end, bit2: cmdQ wait
  *
  * @param base: base-address of cmdQ
  * @param intr_mask: the mask of the interrupt to clear.
  */
-void cmdq_intr_clr(uintptr_t base, u8 intr_mask);
+void cmdQ_intr_clr(uintptr_t base, u8 intr_mask);
 
 /**
- * cmdq_intr_status - cmdQ's interrupt status
+ * cmdQ_intr_status - cmdQ's interrupt status
  *                 bit0: cmdQ intr, bit1: cmdQ end, bit2: cmdQ wait
  *
  * @param base: base-address of cmdQ
  */
-u8 cmdq_intr_status(uintptr_t base);
+u8 cmdQ_intr_status(uintptr_t base);
 
 /**
- * cmdq_engine - start cmdQ
+ * cmdQ_engine - start cmdQ
  *
  * @param base: base-address of cmdQ
  * @param adma_addr: adma table's address
@@ -125,16 +125,16 @@ u8 cmdq_intr_status(uintptr_t base);
  * @param is_adma: 1 if adma table is used.
  * @param cnt: the number of entry in cmdset. only useful if adma
  */
-void cmdq_engine(uintptr_t base, uintptr_t tbl_addr, u16 apb_base,
+void cmdQ_engine(uintptr_t base, uintptr_t tbl_addr, u16 apb_base,
 		bool is_hw_restart, bool is_adma, u16 cnt);
 
 /**
- * cmdq_sw_restart - toggle sw_restart if cmdQ wait-flag is sw-toggle.
+ * cmdQ_sw_restart - toggle sw_restart if cmdQ wait-flag is sw-toggle.
  *
  * @param base: base-address of cmdQ
  */
-void cmdq_sw_restart(uintptr_t base);
+void cmdQ_sw_restart(uintptr_t base);
 
-bool cmdq_is_sw_restart(uintptr_t base);
+bool cmdQ_is_sw_restart(uintptr_t base);
 
-#endif  //_CMDQ_H_
+#endif  //_CVI_CMDQ_H_

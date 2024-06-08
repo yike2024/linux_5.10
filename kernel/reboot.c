@@ -428,7 +428,6 @@ static int run_cmd(const char *cmd)
 		NULL
 	};
 	int ret;
-
 	argv = argv_split(GFP_KERNEL, cmd, NULL);
 	if (argv) {
 		ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_EXEC);

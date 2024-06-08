@@ -154,7 +154,6 @@ static inline __must_check unsigned long
 _copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
-
 	might_fault();
 	if (!should_fail_usercopy() && likely(access_ok(from, n))) {
 		instrument_copy_from_user(to, from, n);
@@ -202,17 +201,6 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 		n = _copy_to_user(to, from, n);
 	return n;
 }
-
-#ifdef CONFIG_COMPAT
-static __always_inline unsigned long __must_check
-copy_in_user(void __user *to, const void __user *from, unsigned long n)
-{
-	might_fault();
-	if (access_ok(to, n) && access_ok(from, n))
-		n = raw_copy_in_user(to, from, n);
-	return n;
-}
-#endif
 
 #ifndef copy_mc_to_kernel
 /*
@@ -356,7 +344,6 @@ copy_struct_from_user(void *dst, size_t ksize, const void __user *src,
 		memset(dst + size, 0, rest);
 	} else if (usize > ksize) {
 		int ret = check_zeroed_user(src + size, rest);
-
 		if (ret <= 0)
 			return ret ?: -E2BIG;
 	}
@@ -395,12 +382,12 @@ long strnlen_user_nofault(const void __user *unsafe_addr, long count);
 })
 
 #ifndef user_access_begin
-#define user_access_begin(ptr, len) access_ok(ptr, len)
+#define user_access_begin(ptr,len) access_ok(ptr, len)
 #define user_access_end() do { } while (0)
 #define unsafe_op_wrap(op, err) do { if (unlikely(op)) goto err; } while (0)
-#define unsafe_get_user(x, p, e) unsafe_op_wrap(__get_user(x, p), e)
-#define unsafe_put_user(x, p, e) unsafe_op_wrap(__put_user(x, p), e)
-#define unsafe_copy_to_user(d, s, l, e) unsafe_op_wrap(__copy_to_user(d, s, l), e)
+#define unsafe_get_user(x,p,e) unsafe_op_wrap(__get_user(x,p),e)
+#define unsafe_put_user(x,p,e) unsafe_op_wrap(__put_user(x,p),e)
+#define unsafe_copy_to_user(d,s,l,e) unsafe_op_wrap(__copy_to_user(d,s,l),e)
 static inline unsigned long user_access_save(void) { return 0UL; }
 static inline void user_access_restore(unsigned long flags) { }
 #endif

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * dwmac-bitmain.c - Bitmain DWMAC specific glue layer
  *
@@ -120,9 +119,7 @@ static int bm_dwmac_init(struct platform_device *pdev, void *priv)
 
 	return 0;
 }
-
 static int bm_validate_ucast_entries(struct device *dev, int ucast_entries)
-
 {
 	int x = ucast_entries;
 
@@ -219,13 +216,13 @@ static int bm_dwmac_probe(struct platform_device *pdev)
 		dev_warn(&pdev->dev, "Cannot get mac tx gating clock!\n");
 	else
 		clk_prepare_enable(bsp_priv->gate_clk_tx);
-//#if 0
-//	bsp_priv->gate_clk_ref = devm_clk_get(&pdev->dev, "gate_clk_ref");
-//	if (IS_ERR(bsp_priv->gate_clk_ref))
-//		dev_warn(&pdev->dev, "Cannot get mac ref gating clock!\n");
-//	else
-//		clk_prepare_enable(bsp_priv->gate_clk_ref);
-//#endif
+#if 0
+	bsp_priv->gate_clk_ref = devm_clk_get(&pdev->dev, "gate_clk_ref");
+	if (IS_ERR(bsp_priv->gate_clk_ref))
+		dev_warn(&pdev->dev, "Cannot get mac ref gating clock!\n");
+	else
+		clk_prepare_enable(bsp_priv->gate_clk_ref);
+#endif
 	plat_dat->bsp_priv = bsp_priv;
 	plat_dat->exit = bm_dwmac_exit;
 	plat_dat->init = bm_dwmac_init;

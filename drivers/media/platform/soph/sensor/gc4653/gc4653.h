@@ -19,9 +19,9 @@ static s64 gc4653_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		0,                      //2:mclk num
 		RX_MAC_CLK_300M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
-		MIPI_WDR_MODE_NONE,     //5:wdr mode
+		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_10BIT,         //6:data type
-		0,                      //7:mipi_devss
+		0,                      //7:mipi_dev
 		1,                      //8:dphy.enable
 		8,                      //9:dphy.hs_settle
 		0,                      //10:cif phy mode
@@ -39,10 +39,10 @@ static s64 gc4653_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 	{//s1 linear mode
 		SNS_CFG_TYPE_MAX,
 		CAMPLL_FREQ_25M,        //1:mclk freq
-		1,                      //2:mclk num
+		1,    				    //2:mclk num
 		RX_MAC_CLK_400M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
-		MIPI_WDR_MODE_NONE,     //5:wdr mode
+		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
 		RAW_DATA_10BIT,         //6:data type
 		4,                      //7:mipi_dev
 		1,                      //8:dphy.enable

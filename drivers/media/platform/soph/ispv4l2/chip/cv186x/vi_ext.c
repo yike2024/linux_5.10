@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: BSD
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
 #include <linux/semaphore.h>
 
-#include <vi_tun_cfg.h>
+#include <linux/vi_tun_cfg.h>
 #include <vi_ext.h>
 #include <vi_common.h>
 

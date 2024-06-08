@@ -198,7 +198,7 @@ static void cv181xadc_clk_off(struct cv181xadc *adc)
 }
 
 static int cv181xadc_set_dai_fmt(struct snd_soc_dai *dai,
-				 unsigned int fmt)
+					unsigned int fmt)
 {
 
 	struct cv181xadc *adc = snd_soc_dai_get_drvdata(dai);
@@ -251,8 +251,8 @@ static int cv181xadc_set_dai_fmt(struct snd_soc_dai *dai,
 }
 
 static int cv181xadc_hw_params(struct snd_pcm_substream *substream,
-			       struct snd_pcm_hw_params *params,
-			       struct snd_soc_dai *dai)
+				  struct snd_pcm_hw_params *params,
+				  struct snd_soc_dai *dai)
 {
 	struct cv181xadc *adc = snd_soc_dai_get_drvdata(dai);
 	int rate;
@@ -348,7 +348,7 @@ static int cv181xadc_hw_params(struct snd_pcm_substream *substream,
 }
 
 static int cv181xadc_startup(struct snd_pcm_substream *substream,
-			     struct snd_soc_dai *dai)
+		struct snd_soc_dai *dai)
 {
 	struct cv181xadc *adc = snd_soc_dai_get_drvdata(dai);
 
@@ -364,7 +364,7 @@ static void cv181xadc_on(struct cv181xadc *adc)
 	u32 val = adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0);
 
 	dev_info(adc->dev, "adc_on, before rxadc reg val=0x%08x\n",
-		 adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0));
+	adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0));
 
 	if ((val & AUDIO_PHY_REG_RXADC_EN_ON) | (val & AUDIO_PHY_REG_I2S_TX_EN_ON))
 		dev_info(adc->dev, "ADC or I2S TX already switched ON!!, val=0x%08x\n", val);
@@ -373,7 +373,7 @@ static void cv181xadc_on(struct cv181xadc *adc)
 	adc_write_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0, val);
 
 	dev_info(adc->dev, "adc_on, after rxadc reg val=0x%08x\n",
-		 adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0));
+	adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0));
 
 }
 
@@ -386,12 +386,12 @@ static void cv181xadc_off(struct cv181xadc *adc)
 	adc_write_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0, val);
 
 	dev_dbg(adc->dev, "adc_off, after rxadc reg val=0x%08x\n",
-		adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0));
+	adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL0));
 
 }
 
 static void cv181xadc_shutdown(struct snd_pcm_substream *substream,
-			       struct snd_soc_dai *dai)
+		struct snd_soc_dai *dai)
 {
 	struct cv181xadc *adc = snd_soc_dai_get_drvdata(dai);
 
@@ -402,7 +402,7 @@ static void cv181xadc_shutdown(struct snd_pcm_substream *substream,
 }
 
 static int cv181xadc_trigger(struct snd_pcm_substream *substream,
-			     int cmd, struct snd_soc_dai *dai)
+		int cmd, struct snd_soc_dai *dai)
 {
 	struct cv181xadc *adc = snd_soc_dai_get_drvdata(dai);
 	int ret = 0;
@@ -429,7 +429,7 @@ static int cv181xadc_trigger(struct snd_pcm_substream *substream,
 }
 
 static int cv181xadc_prepare(struct snd_pcm_substream *substream,
-			     struct snd_soc_dai *dai)
+		struct snd_soc_dai *dai)
 {
 	struct cv181xadc *adc = snd_soc_dai_get_drvdata(dai);
 	u32 val;
@@ -443,10 +443,12 @@ static int cv181xadc_prepare(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+
 static struct cv181xadc *file_adc_dev(struct file *file)
 {
 	return container_of(file->private_data, struct cv181xadc, miscdev);
 }
+
 
 static long adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -457,7 +459,7 @@ static long adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	u32 val, val2;
 	u32 temp;
 
-	if (argp) {
+	if (argp != NULL) {
 		if (!copy_from_user(&val, argp, sizeof(val))) {
 			if (mutex_lock_interruptible(&cv181xadc_mutex)) {
 				pr_debug("cvitekaadc: signal arrives while waiting for lock\n");
@@ -476,7 +478,7 @@ static long adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	case ACODEC_SET_INPUT_VOL:
 		pr_debug("adc: ACODEC_SET_INPUT_VOL\n");
-		if (val < 0 | val > 24)
+		if ((val < 0) | (val > 24))
 			pr_err("Only support range 0 [0dB] ~ 24 [48dB]\n");
 		else if (val == 0) {
 			/* set mute */
@@ -527,7 +529,7 @@ static long adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 	case ACODEC_SET_GAIN_MICL:
 		pr_debug("adc: ACODEC_SET_GAIN_MICL\n");
-		if (val < 0 | val > 24)
+		if ((val < 0) | (val > 24))
 			pr_err("Only support range 0 [0dB] ~ 24 [48dB]\n");
 		else {
 			temp = adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_ANA0) & ~AUDIO_PHY_REG_ADC_VOLL_MASK;
@@ -538,7 +540,7 @@ static long adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 	case ACODEC_SET_GAIN_MICR:
 		pr_debug("adc: ACODEC_SET_GAIN_MICR\n");
-		if (val < 0 | val > 24)
+		if ((val < 0) | (val > 24))
 			pr_err("Only support range 0 [0dB] ~ 24 [48dB]\n");
 		else {
 			temp = adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_ANA0) & ~AUDIO_PHY_REG_ADC_VOLR_MASK;
@@ -762,8 +764,7 @@ static struct snd_soc_dai_driver cv181xadc_dai = {
 
 static const struct snd_kcontrol_new cv181xadc_controls0[] = {
 
-	//name, reg, 控件位在寄存器的位移L，位移R，最大值，是否逻辑取反
-	SOC_DOUBLE("[0]ADC Power", AUDIO_PHY_RXADC_CTRL0, 0, 1, 1, 0),
+	SOC_DOUBLE("[0]ADC Power", AUDIO_PHY_RXADC_CTRL0, 0, 1, 1, 0),//name, reg, 控件位在寄存器的位移L，位移R，最大值，是否逻辑取反
 	SOC_DOUBLE("[0]ADC Capture Volume", AUDIO_PHY_RXADC_ANA0, 0, 16, 24, 0),
 	SOC_DOUBLE("[0]ADC Capture Mute", AUDIO_PHY_RXADC_ANA2, 0, 1, 1, 0),
 
@@ -771,12 +772,12 @@ static const struct snd_kcontrol_new cv181xadc_controls0[] = {
 
 static const struct snd_kcontrol_new cv181xadc_controls1[] = {
 
-	//name, reg, 控件位在寄存器的位移L，位移R，最大值，是否逻辑取反
-	SOC_DOUBLE("[1]ADC Power", AUDIO_PHY_RXADC_CTRL0, 0, 1, 1, 0),
+	SOC_DOUBLE("[1]ADC Power", AUDIO_PHY_RXADC_CTRL0, 0, 1, 1, 0),//name, reg, 控件位在寄存器的位移L，位移R，最大值，是否逻辑取反
 	SOC_DOUBLE("[1]ADC Capture Volume", AUDIO_PHY_RXADC_ANA0, 0, 16, 24, 0),
 	SOC_DOUBLE("[1]ADC Capture Mute", AUDIO_PHY_RXADC_ANA2, 0, 1, 1, 0),
 
 };
+
 
 static unsigned int cv181xadc_reg_read(struct snd_soc_component *codec, unsigned int reg)
 {
@@ -789,7 +790,7 @@ static unsigned int cv181xadc_reg_read(struct snd_soc_component *codec, unsigned
 			if ((ret & 0xffff) == adc_vol_list[lidx])
 				break;
 		for (ridx = 0; ridx < 25; ridx++)
-			if (((ret >> 16) & 0xffff) == adc_vol_list[ridx])
+			if (((ret>>16) & 0xffff) == adc_vol_list[ridx])
 				break;
 		dev_info(adc->dev, "ADC get Vol, reg:%d,ret:%#x, idx=%d.\n", reg, ret, lidx);
 		ret = (lidx << 16) | ridx;
@@ -813,9 +814,10 @@ static int cv181xadc_reg_write(struct snd_soc_component *codec, unsigned int reg
 			temp_lval = 24;
 		if (temp_rval > 24)
 			temp_rval = 24;
-		value = (adc_vol_list[temp_rval] << 16) | adc_vol_list[temp_lval];
+		value = (adc_vol_list[temp_rval]<<16) | adc_vol_list[temp_lval];
 		dev_info(adc->dev, "Set ADC Vol, get input val=%d, output val=0x%x\n", value, temp_lval);
 	}
+
 
 	adc_write_reg(adc->adc_base, reg, value);
 	dev_dbg(adc->dev, "adc_reg_write reg:%d,value:%#x.\n", reg, value);
@@ -871,7 +873,7 @@ static int cv181xadc_probe(struct platform_device *pdev)
 	struct cv181xadc *adc;
 	struct resource *res;
 	u32 mclk_source_addr = 0x0;
-	const struct snd_soc_component_driver *comp_drv;
+	struct snd_soc_component_driver *comp_drv;
 	u32 ctrl1;
 	int ret;
 
@@ -906,6 +908,7 @@ static int cv181xadc_probe(struct platform_device *pdev)
 	/* set default input vol gain to maxmum 48dB, vol range is 0~24 */
 	ctrl1 = adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL1);
 	adc_write_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL1, ctrl1 | AUDIO_ADC_IGR_INIT_EN);
+
 
 	if (adc_comp_num)
 		comp_drv = &soc_component_dev_cv181xadc0;
@@ -977,6 +980,7 @@ static SIMPLE_DEV_PM_OPS(cv181xadc_pm_ops, cv181xadc_suspend,
 			 cv181xadc_resume);
 #endif
 
+
 static struct platform_driver cv181xadc_platform_driver = {
 	.probe		= cv181xadc_probe,
 	.remove		= cv181xadc_remove,
@@ -989,69 +993,69 @@ static struct platform_driver cv181xadc_platform_driver = {
 	},
 };
 
-//#if 0
-//static int cvitek_adc_probe(struct platform_device *pdev)
-//{
-//	int ret;
-//	struct cvitek_adc_pri *adc_pri = NULL;
-//	struct resource *res;
-//	u32 mclk_source_addr = 0x0;
-//	u32 reg_val;
+#if 0
+static int cvitek_adc_probe(struct platform_device *pdev)
+{
+	int ret;
+	struct cvitek_adc_pri *adc_pri = NULL;
+	struct resource *res;
+	u32 mclk_source_addr = 0x0;
+	u32 reg_val;
 
-//	adc_pri = devm_kzalloc(&pdev->dev, sizeof(*adc_pri), GFP_KERNEL);
-//	if(!adc_pri)
-//		return -ENOMEM;
-//	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-//	adc_pri->adc_base = devm_ioremap_resource(&pdev->dev, res);
-//	dev_info(&pdev->dev, "cvitek adc get adc_base=0x%p\n", adc_pri->adc_base);
-//	if(IS_ERR(adc_pri->adc_base))
-//		return PTR_ERR(adc_pri->adc_base);
-//	platform_set_drvdata(pdev, adc_pri);
-//	adc->dev = &pdev->dev;
+	adc_pri = devm_kzalloc(&pdev->dev, sizeof(*adc_pri), GFP_KERNEL);
+	if(!adc_pri)
+		return -ENOMEM;
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	adc_pri->adc_base = devm_ioremap_resource(&pdev->dev, res);
+	dev_info(&pdev->dev, "cvitek adc get adc_base=0x%p\n", adc_pri->adc_base);
+	if(IS_ERR(adc_pri->adc_base))
+		return PTR_ERR(adc_pri->adc_base);
+	platform_set_drvdata(pdev, adc_pri);
+	adc->dev = &pdev->dev;
 
-//	of_property_read_u32(pdev->dev.of_node, "dev-id", &adc_pri->dev_id);
+	of_property_read_u32(pdev->dev.of_node, "dev-id", &adc_pri->dev_id);
 
-//	ret = adc_device_register(adc_pri);
-//	if(ret < 0){
-//		dev_err(&pdev->dev, "cvitek adc register misc dev error\n");
-//		return ret;
-//	}
-//	of_property_read_u32(pdev->dev.of_node, "clk_source", &mclk_source_addr);
+	ret = adc_device_register(adc_pri);
+	if(ret < 0){
+		dev_err(&pdev->dev, "cvitek adc register misc dev error\n");
+		return ret;
+	}
+	of_property_read_u32(pdev->dev.of_node, "clk_source", &mclk_source_addr);
 
-//	if(mclk_source_addr)
-//		adc_pri->mclk_source = ioremap(mclk_source_addr, 0x100);
-//	else
-//		dev_err(&pdev->dev, "get MCLK source failed!!\n");
+	if(mclk_source_addr)
+		adc_pri->mclk_source = ioremap(mclk_source_addr, 0x100);
+	else
+		dev_err(&pdev->dev, "get MCLK source failed!!\n");
 
-//	/* set default input vol gain to maxmum 48dB, vol range is 0~24 */
-//	reg_val = adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL1);
-//	adc_write_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL1, reg_val | AUDIO_ADC_IGR_INIT_EN);
+	/* set default input vol gain to maxmum 48dB, vol range is 0~24 */
+	reg_val = adc_read_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL1);
+	adc_write_reg(adc->adc_base, AUDIO_PHY_RXADC_CTRL1, reg_val | AUDIO_ADC_IGR_INIT_EN);
 
-//	return devm_snd_soc_register_component(&pdev->dev, &soc_component_cviadc,
-//						&cvitek_adc_dai, 1);
+	return devm_snd_soc_register_component(&pdev->dev, &soc_component_cviadc,
+						&cvitek_adc_dai, 1);
 
-//}
+}
 
-//static int cvitek_adc_remove(struct platform_device *pdev)
-//{
-//	struct cvitek_adc_pri *adc_pri = platform_get_drvdata(pdev);
-//	iounmap(adc_pri->mclk_source);
-//	dev_err(&pdev->dev, "cvitek_adc_remove\n");
-//	return 0;
-//}
-//static struct platform_driver cvitek_adc_platform_driver = {
-//	.probe =  cvitek_adc_probe,
-//	.remove = cvitek_adc_remove,
-//	.driver = {
-//		.name = "cvitek_adc",
-//		.of_match_table = of_match_ptr(cvitek_adc_of_match),
-//#ifdef CONFIG_PM_SLEEP
-//		.pm = &cvitek_adc_pm_ops,
-//#endif
-//	},
-//};
+static int cvitek_adc_remove(struct platform_device *pdev)
+{
+	struct cvitek_adc_pri *adc_pri = platform_get_drvdata(pdev);
+	iounmap(adc_pri->mclk_source);
+	dev_err(&pdev->dev, "cvitek_adc_remove\n");
+	return 0;
+}
+static struct platform_driver cvitek_adc_platform_driver = {
+	.probe =  cvitek_adc_probe,
+	.remove = cvitek_adc_remove,
+	.driver = {
+		.name = "cvitek_adc",
+		.of_match_table = of_match_ptr(cvitek_adc_of_match),
+#ifdef CONFIG_PM_SLEEP
+		.pm = &cvitek_adc_pm_ops,
+#endif
+	},
+};
 
-//#endif
+#endif
 module_platform_driver(cv181xadc_platform_driver);
 
 MODULE_DESCRIPTION("ASoC CVITEK cvitekaADC driver");

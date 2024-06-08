@@ -20,11 +20,11 @@ DECLARE_EVENT_CLASS(kmem_alloc,
 	TP_ARGS(call_site, ptr, bytes_req, bytes_alloc, gfp_flags),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, call_site)
-		__field(const void *, ptr)
-		__field(size_t, bytes_req)
-		__field(size_t, bytes_alloc)
-		__field(gfp_t, gfp_flags)
+		__field(	unsigned long,	call_site	)
+		__field(	const void *,	ptr		)
+		__field(	size_t,		bytes_req	)
+		__field(	size_t,		bytes_alloc	)
+		__field(	gfp_t,		gfp_flags	)
 	),
 
 	TP_fast_assign(
@@ -71,12 +71,12 @@ DECLARE_EVENT_CLASS(kmem_alloc_node,
 	TP_ARGS(call_site, ptr, bytes_req, bytes_alloc, gfp_flags, node),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, call_site)
-		__field(const void *, ptr)
-		__field(size_t, bytes_req)
-		__field(size_t, bytes_alloc)
-		__field(gfp_t, gfp_flags)
-		__field(int, node)
+		__field(	unsigned long,	call_site	)
+		__field(	const void *,	ptr		)
+		__field(	size_t,		bytes_req	)
+		__field(	size_t,		bytes_alloc	)
+		__field(	gfp_t,		gfp_flags	)
+		__field(	int,		node		)
 	),
 
 	TP_fast_assign(
@@ -122,8 +122,8 @@ DECLARE_EVENT_CLASS(kmem_free,
 	TP_ARGS(call_site, ptr),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, call_site)
-		__field(const void *, ptr)
+		__field(	unsigned long,	call_site	)
+		__field(	const void *,	ptr		)
 	),
 
 	TP_fast_assign(
@@ -156,8 +156,8 @@ TRACE_EVENT(mm_page_free,
 	TP_ARGS(page, order),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, pfn)
-		__field(unsigned int, order)
+		__field(	unsigned long,	pfn		)
+		__field(	unsigned int,	order		)
 	),
 
 	TP_fast_assign(
@@ -178,7 +178,7 @@ TRACE_EVENT(mm_page_free_batched,
 	TP_ARGS(page),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, pfn)
+		__field(	unsigned long,	pfn		)
 	),
 
 	TP_fast_assign(
@@ -198,10 +198,10 @@ TRACE_EVENT(mm_page_alloc,
 	TP_ARGS(page, order, gfp_flags, migratetype),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, pfn)
-		__field(unsigned int, order)
-		__field(gfp_t, gfp_flags)
-		__field(int, migratetype)
+		__field(	unsigned long,	pfn		)
+		__field(	unsigned int,	order		)
+		__field(	gfp_t,		gfp_flags	)
+		__field(	int,		migratetype	)
 	),
 
 	TP_fast_assign(
@@ -226,9 +226,9 @@ DECLARE_EVENT_CLASS(mm_page,
 	TP_ARGS(page, order, migratetype),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, pfn)
-		__field(unsigned int, order)
-		__field(int, migratetype)
+		__field(	unsigned long,	pfn		)
+		__field(	unsigned int,	order		)
+		__field(	int,		migratetype	)
 	),
 
 	TP_fast_assign(
@@ -259,9 +259,9 @@ TRACE_EVENT(mm_page_pcpu_drain,
 	TP_ARGS(page, order, migratetype),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, pfn)
-		__field(unsigned int, order)
-		__field(int, migratetype)
+		__field(	unsigned long,	pfn		)
+		__field(	unsigned int,	order		)
+		__field(	int,		migratetype	)
 	),
 
 	TP_fast_assign(
@@ -286,12 +286,12 @@ TRACE_EVENT(mm_page_alloc_extfrag,
 		alloc_migratetype, fallback_migratetype),
 
 	TP_STRUCT__entry(
-		__field(unsigned long, pfn)
-		__field(int, alloc_order)
-		__field(int, fallback_order)
-		__field(int, alloc_migratetype)
-		__field(int, fallback_migratetype)
-		__field(int, change_ownership)
+		__field(	unsigned long,	pfn			)
+		__field(	int,		alloc_order		)
+		__field(	int,		fallback_order		)
+		__field(	int,		alloc_migratetype	)
+		__field(	int,		fallback_migratetype	)
+		__field(	int,		change_ownership	)
 	),
 
 	TP_fast_assign(

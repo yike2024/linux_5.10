@@ -21,7 +21,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/comm_cif.h>
+#include <linux/cif_uapi.h>
 #include <linux/sns_v4l2_uapi.h>
 
 #include "imx307.h"
@@ -40,7 +40,7 @@
 #define IMX307_SNS_TYPE_SDR V4L2_SONY_IMX307_2L_MIPI_2M_30FPS_12BIT
 #define IMX307_SNS_TYPE_WDR V4L2_SONY_IMX307_2L_MIPI_2M_30FPS_12BIT_WDR2TO1
 
-static const enum mipi_wdr_mode_e imx307_wdr_mode = MIPI_WDR_MODE_DOL;
+static const enum mipi_wdr_mode_e imx307_wdr_mode = CVI_MIPI_WDR_MODE_DOL;
 
 static int imx307_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -267,21 +267,6 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int enum_frame_interval(struct v4l2_subdev *sd,
-			      struct v4l2_subdev_pad_config *cfg,
-			      struct v4l2_subdev_frame_interval_enum *fie)
-{
-	struct imx307 *imx307 = to_imx307(sd);
-
-	fie->width  = imx307->cur_mode->width;
-	fie->height = imx307->cur_mode->height;
-
-	fie->interval.numerator   = imx307->cur_mode->max_fps.numerator;
-	fie->interval.denominator = imx307->cur_mode->max_fps.denominator;
-
-	return 0;
-}
-
 static int enum_frame_size(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_frame_size_enum *fse)
@@ -376,7 +361,7 @@ static int start_streaming(struct imx307 *imx307)
 	const sns_sync_info_t *sync_info;
 	int ret;
 
-	if (imx307->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
+	if (imx307->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
 		reg_list = &imx307->cur_mode->reg_list;
 	} else {//wdr
 		reg_list = &imx307->cur_mode->wdr_reg_list;
@@ -613,7 +598,7 @@ static long imx307_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		int type = 0;
 
-		if (imx307->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
+		if (imx307->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
 			type = IMX307_SNS_TYPE_SDR;
 		} else {//wdr
 			type = IMX307_SNS_TYPE_WDR;
@@ -651,7 +636,7 @@ static long imx307_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		if (hdr_on)
 			imx307->cur_mode->mipi_wdr_mode = imx307_wdr_mode;
 		else
-			imx307->cur_mode->mipi_wdr_mode = MIPI_WDR_MODE_NONE;
+			imx307->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
 
 		imx307_update_link_menu(imx307);
 		break;
@@ -675,6 +660,7 @@ static long imx307_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static long imx307_compat_ioctl32(struct v4l2_subdev *sd,
 				   unsigned int cmd, unsigned long arg)
 {
+	void __user *up = compat_ptr(arg);
 	long ret;
 
 	switch (cmd) {
@@ -703,7 +689,6 @@ static const struct v4l2_subdev_pad_ops imx307_pad_ops = {
 	.get_fmt = get_pad_format,
 	.set_fmt = set_pad_format,
 	.enum_frame_size = enum_frame_size,
-	.enum_frame_interval = enum_frame_interval,
 	.get_mbus_config = g_mbus_config,
 };
 
@@ -926,12 +911,12 @@ static int imx307_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id imx307_of_match[] = {
-	{ .compatible = "cvitek,sensor0" },
-	{ .compatible = "cvitek,sensor1" },
-	{ .compatible = "cvitek,sensor2" },
-	{ .compatible = "cvitek,sensor3" },
-	{ .compatible = "cvitek,sensor4" },
-	{ .compatible = "cvitek,sensor5" },
+	{ .compatible = "v4l2,sensor0" },
+	{ .compatible = "v4l2,sensor1" },
+	{ .compatible = "v4l2,sensor2" },
+	{ .compatible = "v4l2,sensor3" },
+	{ .compatible = "v4l2,sensor4" },
+	{ .compatible = "v4l2,sensor5" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, imx307_of_match);

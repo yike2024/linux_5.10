@@ -31,7 +31,7 @@ int mute_pin_l; // 495
 int mute_pin_r; // 510
 
 
-void mute_amp(bool enable)
+void muteAmp(bool enable)
 {
 	if (enable) {
 		if (mute_pin_l != -EINVAL) {
@@ -252,7 +252,7 @@ static void cv181xdac_shutdown(struct snd_pcm_substream *substream,
 	struct cv181xdac *dac = snd_soc_dai_get_drvdata(dai);
 
 	dev_dbg(dac->dev, "dac_shutdown\n");
-	mute_amp(true);
+	muteAmp(true);
 	cv182xa_reset_dac();
 }
 
@@ -270,7 +270,7 @@ static int cv181xdac_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		snd_pcm_stream_unlock_irq(substream);
 		cv181xdac_on(dac);
-		mute_amp(false);
+		muteAmp(false);
 		snd_pcm_stream_lock_irq(substream);
 		break;
 
@@ -278,7 +278,7 @@ static int cv181xdac_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		snd_pcm_stream_unlock_irq(substream);
-		mute_amp(true);
+		muteAmp(true);
 		cv181xdac_off(dac);
 		snd_pcm_stream_lock_irq(substream);
 		break;
@@ -660,7 +660,7 @@ static int cv181xdac_probe(struct platform_device *pdev)
 
 static int cv181xdac_remove(struct platform_device *pdev)
 {
-	mute_amp(true);
+	muteAmp(true);
 	dev_dbg(&pdev->dev, "cvitekadac_remove\n");
 	return 0;
 }
@@ -680,7 +680,7 @@ static int cv181xdac_suspend(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct cv181xdac *dac = platform_get_drvdata(pdev);
 
-	mute_amp(true);
+	muteAmp(true);
 	if (!dac->reg_ctx) {
 		dac->reg_ctx = devm_kzalloc(dac->dev, sizeof(struct cv181xdac_context), GFP_KERNEL);
 		if (!dac->reg_ctx)
@@ -703,7 +703,7 @@ static int cv181xdac_resume(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct cv181xdac *dac = platform_get_drvdata(pdev);
 
-	mute_amp(false);
+	muteAmp(false);
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0, dac->reg_ctx->ctl0);
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL1, dac->reg_ctx->ctl1);
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_AFE0, dac->reg_ctx->afe0);

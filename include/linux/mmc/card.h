@@ -252,7 +252,7 @@ struct mmc_card {
 #define MMC_TYPE_SDIO		2		/* SDIO card */
 #define MMC_TYPE_SD_COMBO	3		/* SD combo (IO+mem) card */
 	unsigned int		state;		/* (our) card state */
-	unsigned int		quirks;		/* card quirks */
+	unsigned int		quirks; 	/* card quirks */
 	unsigned int		quirk_max_rate;	/* max rate set by quirks */
 #define MMC_QUIRK_LENIENT_FN0	(1<<0)		/* allow SDIO FN0 writes outside of the VS CCCR range */
 #define MMC_QUIRK_BLKSZ_FOR_BYTE_MODE (1<<1)	/* use func->cur_blksize */
@@ -275,11 +275,11 @@ struct mmc_card {
 	bool			reenable_cmdq;	/* Re-enable Command Queue */
 
 	unsigned int		erase_size;	/* erase size in sectors */
-	unsigned int		erase_shift;	/* if erase unit is power 2 */
-	unsigned int		pref_erase;	/* in sectors */
+ 	unsigned int		erase_shift;	/* if erase unit is power 2 */
+ 	unsigned int		pref_erase;	/* in sectors */
 	unsigned int		eg_boundary;	/* don't cross erase-group boundaries */
 	unsigned int		erase_arg;	/* erase / trim / discard */
-	u8			erased_byte;	/* value of erased bytes */
+ 	u8			erased_byte;	/* value of erased bytes */
 
 	u32			raw_cid[4];	/* raw card CID */
 	u32			raw_csd[4];	/* raw card CSD */
@@ -300,7 +300,7 @@ struct mmc_card {
 	struct sdio_func	*sdio_single_irq; /* SDIO function when only one IRQ active */
 	u8			major_rev;	/* major revision number */
 	u8			minor_rev;	/* minor revision number */
-	unsigned int		num_info;	/* number of info strings */
+	unsigned		num_info;	/* number of info strings */
 	const char		**info;		/* info strings */
 	struct sdio_func_tuple	*tuples;	/* unknown common tuples */
 

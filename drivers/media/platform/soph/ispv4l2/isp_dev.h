@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ISP_DEV_H
 #define _ISP_DEV_H
 
@@ -27,6 +26,7 @@
 
 #define ISP_V4L2_EVENT_ELEMS 4
 #define ISP_SUBDEV_NAME   "ispv4l2_subdev"
+#define V4L2_ISP_IRQ_NAME "ispv4l2_irq"
 
 #define GRP_ID_SENSOR		BIT(0)
 #define GRP_ID_CIF			BIT(1)
@@ -34,13 +34,13 @@
 
 #define MAX_SENSOR_NUM 6
 
-enum sop_isp_pad {
-	ISP_PAD_SINK,
-	ISP_PAD_SOURCE,
-	ISP_PAD_MAX
+enum cvi_isp_pad {
+	CVI_ISP_PAD_SINK,
+	CVI_ISP_PAD_SOURCE,
+	CVI_ISP_PAD_MAX
 };
 
-struct sop_sensor_info {
+struct cvi_sensor_info {
 	struct v4l2_subdev *sd;
 	struct device *dev;
 	struct v4l2_mbus_config mbus;
@@ -49,29 +49,29 @@ struct sop_sensor_info {
 	struct v4l2_subdev_pad_config cfg;
 };
 
-struct sop_isp_subdev {
+struct cvi_isp_subdev {
 	struct v4l2_subdev sd;
-	struct media_pad pads[ISP_PAD_MAX];
+	struct media_pad pads[CVI_ISP_PAD_MAX];
 	atomic_t frm_sync_seq;
 };
 
-struct sop_isp_async_subdev {
+struct cvi_isp_async_subdev {
 	struct v4l2_async_subdev asd;
 	struct v4l2_mbus_config mbus;
 };
 
-struct sop_isp_device {
+struct cvi_isp_device {
 	char name[128];
 	struct mutex  mutex;
 	struct device *dev;
 	struct video_device vdev;
 	struct v4l2_device v4l2_dev;
-	struct sop_vi_dev vi_dev;
-	struct sop_isp_subdev isp_sdev;
+	struct cvi_vi_dev vi_dev;
+	struct cvi_isp_subdev isp_sdev;
 	struct media_device media_dev;
 	struct v4l2_async_notifier notifier;
-	struct sop_sensor_info *active_sensor;
-	struct sop_sensor_info sensors[MAX_SENSOR_NUM];
+	struct cvi_sensor_info *active_sensor;
+	struct cvi_sensor_info sensors[MAX_SENSOR_NUM];
 	int num_sensors;
 	int is_powerOn;
 };

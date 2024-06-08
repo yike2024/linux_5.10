@@ -1162,7 +1162,7 @@ char *phy_attached_info_irq(struct phy_device *phydev)
 	char *irq_str;
 	char irq_num[8];
 
-	switch (phydev->irq) {
+	switch(phydev->irq) {
 	case PHY_POLL:
 		irq_str = "POLL";
 		break;

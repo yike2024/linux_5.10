@@ -184,10 +184,7 @@ static int rtl8211f_config_init(struct phy_device *phydev)
 	u16 val_txdly, val_rxdly;
 	u16 val;
 	int ret;
-#if IS_ENABLED(CONFIG_ARCH_ATHENA2)
-	phy_modify_paged_changed(phydev, 0xa43, 0x19, 0x21, 0x0);
-	phy_modify_paged_changed(phydev, 0x0, 0x0, 0x0, 0x8000);	
-#endif
+
 	val = RTL8211F_ALDPS_ENABLE | RTL8211F_ALDPS_PLL_OFF | RTL8211F_ALDPS_XTAL_OFF;
 	phy_modify_paged_changed(phydev, 0xa43, RTL8211F_PHYCR1, val, val);
 
@@ -251,7 +248,7 @@ static int rtl8211f_config_init(struct phy_device *phydev)
 	phydev->duplex = DUPLEX_FULL;
 #endif
 #if IS_ENABLED(CONFIG_ARCH_CV186X)
-	ret = phy_modify_paged_changed(phydev, 0xd04, 0x10, 0xffff, 0x820B);
+	ret = phy_modify_paged_changed(phydev, 0xd04, 0x10, 0xffff,0x820B);
 #endif
 	return 0;
 }

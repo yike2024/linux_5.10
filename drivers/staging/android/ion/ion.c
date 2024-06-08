@@ -82,7 +82,6 @@ static struct ion_buffer *ion_buffer_create(struct ion_heap *heap,
 	ret = heap->ops->allocate(heap, buffer, len, flags);
 
 	if (ret) {
-		pr_err("%s allocate len(%ld) flags(%ld) failed! retry.\n", __func__, len, flags);
 		if (!(heap->flags & ION_HEAP_FLAG_DEFER_FREE))
 			goto err2;
 
@@ -426,10 +425,8 @@ int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
 	 */
 	len = PAGE_ALIGN(len);
 
-	if (!len) {
-		pr_err("PAGE_ALIGN(%zu) failed!\n", len);
+	if (!len)
 		return -EINVAL;
-	}
 
 	down_read(&dev->lock);
 	plist_for_each_entry(heap, &dev->heaps, node) {
@@ -439,23 +436,14 @@ int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
 		buffer = ion_buffer_create(heap, dev, len, flags);
 		if (!IS_ERR(buffer))
 			break;
-		else
-			pr_err("%s total_size = 0x%lx, avail_size = 0x%lx\n", __func__
-					, heap->total_size, heap->total_size - heap->num_of_alloc_bytes);
 	}
 	up_read(&dev->lock);
 
-	if (!buffer) {
-		pr_err("1-ion_buffer_create(%d, %zu, %d) failed! buffer = NULL!\n"
-				, heap_id_mask, len, flags);
+	if (!buffer)
 		return -ENODEV;
-	}
 
-	if (IS_ERR(buffer)) {
-		pr_err("2-ion_buffer_create(%d, %zu, %d) failed! ret = %d\n"
-				, heap_id_mask, len, flags, PTR_ERR(buffer));
+	if (IS_ERR(buffer))
 		return PTR_ERR(buffer);
-	}
 
 	exp_info.ops = &dma_buf_ops;
 	exp_info.size = buffer->size;
@@ -465,15 +453,12 @@ int ion_alloc(size_t len, unsigned int heap_id_mask, unsigned int flags)
 	dmabuf = dma_buf_export(&exp_info);
 	if (IS_ERR(dmabuf)) {
 		_ion_buffer_destroy(buffer);
-		pr_err("dma_buf_export faeild! ret = %d\n", PTR_ERR(dmabuf));
 		return PTR_ERR(dmabuf);
 	}
 
 	fd = dma_buf_fd(dmabuf, O_CLOEXEC);
-	if (fd < 0) {
+	if (fd < 0)
 		dma_buf_put(dmabuf);
-		pr_err("dma_buf_fd failed(fd=%d)!\n", fd);
-	}
 
 #ifdef CONFIG_ION_CVITEK
 	if (buffer && buf)
@@ -794,11 +779,7 @@ subsys_initcall(ion_device_create);
 #include <linux/syscalls.h>
 void ion_free(int fd)
 {
-	int ret = 0;
-
-	ret = ksys_close(fd);
-	if (ret < 0)
-		pr_err("ksys_close failed! errno=%d\n", ret);
+	ksys_close(fd);
 }
 EXPORT_SYMBOL(ion_free);
 

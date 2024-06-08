@@ -55,7 +55,6 @@ static struct snd_soc_dai_link_component cv182x_dac_platform = {
 	.dai_name = "4130000.i2s",
 
 };
-
 static struct snd_soc_dai_link cv182x_dac_dai = {
 	.name = "cv182x-i2s-dac",
 	.stream_name = "cv182x-dac",
@@ -73,12 +72,14 @@ static struct snd_soc_dai_link cv182x_dac_dai = {
 	.playback_only = 1,
 };
 
+
 static struct snd_soc_card cv182x_dac = {
 	.owner = THIS_MODULE,
 	.dai_link = &cv182x_dac_dai,
 	.num_links = 1,
 
 };
+
 
 static int cv182x_dac_proc_show(struct seq_file *m, void *v)
 {
@@ -99,12 +100,12 @@ static int cv182x_dac_proc_show(struct seq_file *m, void *v)
 	else
 		audio_freq = 24576000;
 
+
 	seq_puts(m, "\n------------- CVI AO ATTRIBUTE -------------\n");
 	seq_puts(m, "AiDev    Workmode    SampleRate    BitWidth\n");
 	val1 = (readl(i2s3) >> 1) & 0x1;
 	//samplerate = audio_freq/(mclk_div * CIC_mask * 64 * cofe(4))
-	val2 = audio_freq / ((readl(i2s3 + 0x64) & 0x0000ffff) *
-		((readl(dac + AUDIO_PHY_TXDAC_CTRL1) & 0x1) + 1) * 64 * 4);
+	val2 = audio_freq / ((readl(i2s3 + 0x64) & 0x0000ffff)*((readl(dac + AUDIO_PHY_TXDAC_CTRL1) & 0x1) + 1)*64*4);
 	val3 = ((readl(i2s3 + 0x10) >> 1) & 0x3) * 16;
 	seq_printf(m, "  %d       %s        %6d        %2d\n", 1, val1 == 0 ? "slave" : "master", val2, val3);
 	seq_puts(m, "\n");
@@ -181,7 +182,7 @@ static int cv182x_dac_probe(struct platform_device *pdev)
 				dev_err(&pdev->dev, "Error creating audio_debug proc folder entry\n");
 		}
 
-		if (proc_audio_dir && proc_ao_not_allocted) {
+		if (proc_audio_dir && (proc_ao_not_allocted == true)) {
 			proc_ao = proc_create_data("cv182x_dac", 0444, proc_audio_dir, &cv182x_dac_proc_ops, np);
 			if (!proc_ao)
 				dev_err(&pdev->dev, "Create cv182x_dac proc failed!\n");

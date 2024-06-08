@@ -21,7 +21,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/comm_cif.h>
+#include <linux/cif_uapi.h>
 #include <linux/sns_v4l2_uapi.h>
 
 #include "gc4653.h"
@@ -40,7 +40,7 @@
 #define GC4653_SNS_TYPE_SDR V4L2_GCORE_GC4653_MIPI_4M_30FPS_10BIT
 #define GC4653_SNS_TYPE_WDR V4L2_SNS_TYPE_BUTT
 
-static const enum mipi_wdr_mode_e gc4653_wdr_mode = MIPI_WDR_MODE_NONE;
+static const enum mipi_wdr_mode_e gc4653_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
 
 static int gc4653_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -263,21 +263,6 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int enum_frame_interval(struct v4l2_subdev *sd,
-			      struct v4l2_subdev_pad_config *cfg,
-			      struct v4l2_subdev_frame_interval_enum *fie)
-{
-	struct gc4653 *gc4653 = to_gc4653(sd);
-
-	fie->width  = gc4653->cur_mode->width;
-	fie->height = gc4653->cur_mode->height;
-
-	fie->interval.numerator   = gc4653->cur_mode->max_fps.numerator;
-	fie->interval.denominator = gc4653->cur_mode->max_fps.denominator;
-
-	return 0;
-}
-
 static int enum_frame_size(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_frame_size_enum *fse)
@@ -370,7 +355,7 @@ static int start_streaming(struct gc4653 *gc4653)
 	const sns_sync_info_t *sync_info;
 	int ret;
 
-	if (gc4653->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
+	if (gc4653->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
 		reg_list = &gc4653->cur_mode->reg_list;
 	}
 
@@ -608,7 +593,7 @@ static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		int type = 0;
 
-		if (gc4653->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
+		if (gc4653->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
 			type = GC4653_SNS_TYPE_SDR;
 		} else {//wdr
 			type = GC4653_SNS_TYPE_WDR;
@@ -647,7 +632,7 @@ static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		if (hdr_on)
 			dev_warn(&client->dev, "Not support HDR!\n");
 		else
-			gc4653->cur_mode->mipi_wdr_mode = MIPI_WDR_MODE_NONE;
+			gc4653->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
 
 		gc4653_update_link_menu(gc4653);
 		break;
@@ -671,6 +656,7 @@ static long gc4653_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static long gc4653_compat_ioctl32(struct v4l2_subdev *sd,
 				   unsigned int cmd, unsigned long arg)
 {
+	void __user *up = compat_ptr(arg);
 	long ret;
 
 	switch (cmd) {
@@ -699,7 +685,6 @@ static const struct v4l2_subdev_pad_ops gc4653_pad_ops = {
 	.get_fmt = get_pad_format,
 	.set_fmt = set_pad_format,
 	.enum_frame_size = enum_frame_size,
-	.enum_frame_interval = enum_frame_interval,
 	.get_mbus_config = g_mbus_config,
 };
 
@@ -922,12 +907,12 @@ static int gc4653_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id gc4653_of_match[] = {
-	{ .compatible = "cvitek,sensor0" },
-	{ .compatible = "cvitek,sensor1" },
-	{ .compatible = "cvitek,sensor2" },
-	{ .compatible = "cvitek,sensor3" },
-	{ .compatible = "cvitek,sensor4" },
-	{ .compatible = "cvitek,sensor5" },
+	{ .compatible = "v4l2,sensor0" },
+	{ .compatible = "v4l2,sensor1" },
+	{ .compatible = "v4l2,sensor2" },
+	{ .compatible = "v4l2,sensor3" },
+	{ .compatible = "v4l2,sensor4" },
+	{ .compatible = "v4l2,sensor5" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, gc4653_of_match);

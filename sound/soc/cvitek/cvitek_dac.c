@@ -33,7 +33,7 @@ static int mute_pin_1L; // 487
 static int mute_pin_1R;
 static int dac_comp_num;
 
-static void mute_amp(bool enable)
+static void muteAmp(bool enable)
 {
 	if (enable) {
 		if (mute_pin_0L != -EINVAL) {
@@ -95,14 +95,16 @@ static int dac_close(struct inode *inode, struct file *file)
 	return 0;
 }
 
+
 static int cv181xdac_set_dai_fmt(struct snd_soc_dai *dai,
-				 unsigned int fmt)
+					unsigned int fmt)
 {
 
 	struct cv181xdac *dac = snd_soc_dai_get_drvdata(dai);
 
 	if (!dac->dev)
 		dev_err(dac->dev, "dev is NULL\n");
+
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 	case SND_SOC_DAIFMT_CBM_CFM:
@@ -149,8 +151,8 @@ static int cv181xdac_set_dai_fmt(struct snd_soc_dai *dai,
 }
 
 static int cv181xdac_hw_params(struct snd_pcm_substream *substream,
-			       struct snd_pcm_hw_params *params,
-			       struct snd_soc_dai *dai)
+				  struct snd_pcm_hw_params *params,
+				  struct snd_soc_dai *dai)
 {
 	struct cv181xdac *dac = snd_soc_dai_get_drvdata(dai);
 	int rate;
@@ -224,7 +226,7 @@ static int cv181xdac_hw_params(struct snd_pcm_substream *substream,
 }
 
 static int cv181xdac_startup(struct snd_pcm_substream *substream,
-			     struct snd_soc_dai *dai)
+		struct snd_soc_dai *dai)
 {
 	return 0;
 }
@@ -242,7 +244,7 @@ static void cv181xdac_on(struct cv181xdac *dac)
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0, val);
 
 	dev_dbg(dac->dev, "dac_on, after ctrl0_reg val=0x%08x\n",
-		dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0));
+	dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0));
 
 }
 
@@ -251,27 +253,27 @@ static void cv181xdac_off(struct cv181xdac *dac)
 	u32 val = dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0);
 
 	dev_dbg(dac->dev, "dac_off, before ctrl_reg val=0x%08x\n",
-		dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0));
+	 dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0));
 
 	val &= AUDIO_PHY_REG_TXDAC_EN_OFF & AUDIO_PHY_REG_I2S_RX_EN_OFF;
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0, val);
 
 	dev_dbg(dac->dev, "dac_off, after ctrl_reg val=0x%08x\n",
-		dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0));
+	dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0));
 }
 
 static void cv181xdac_shutdown(struct snd_pcm_substream *substream,
-			       struct snd_soc_dai *dai)
+		struct snd_soc_dai *dai)
 {
 	struct cv181xdac *dac = snd_soc_dai_get_drvdata(dai);
 
 	dev_dbg(dac->dev, "dac_shutdown\n");
-	mute_amp(true);
+	muteAmp(true);
 	cv182xa_reset_dac();
 }
 
 static int cv181xdac_trigger(struct snd_pcm_substream *substream,
-			     int cmd, struct snd_soc_dai *dai)
+		int cmd, struct snd_soc_dai *dai)
 {
 	struct cv181xdac *dac = snd_soc_dai_get_drvdata(dai);
 	int ret = 0;
@@ -284,7 +286,7 @@ static int cv181xdac_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		snd_pcm_stream_unlock_irq(substream);
 		cv181xdac_on(dac);
-		mute_amp(false);
+		muteAmp(false);
 		snd_pcm_stream_lock_irq(substream);
 		break;
 
@@ -292,7 +294,7 @@ static int cv181xdac_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		snd_pcm_stream_unlock_irq(substream);
-		mute_amp(true);
+		muteAmp(true);
 		cv181xdac_off(dac);
 		snd_pcm_stream_lock_irq(substream);
 		break;
@@ -304,7 +306,7 @@ static int cv181xdac_trigger(struct snd_pcm_substream *substream,
 }
 
 static int cv181xdac_prepare(struct snd_pcm_substream *substream,
-			     struct snd_soc_dai *dai)
+		struct snd_soc_dai *dai)
 {
 	struct cv181xdac *dac = snd_soc_dai_get_drvdata(dai);
 	u32 val;
@@ -334,7 +336,7 @@ static long dac_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	u32 val;
 	u32 temp;
 
-	if (argp) {
+	if (argp != NULL) {
 		if (!copy_from_user(&val, argp, sizeof(val))) {
 			if (mutex_lock_interruptible(&cv181xdac_mutex)) {
 				pr_debug("cvitekadac: signal arrives while waiting for lock\n");
@@ -352,7 +354,7 @@ static long dac_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case ACODEC_SET_OUTPUT_VOL:
 		pr_debug("dac: ACODEC_SET_OUTPUT_VOL with val=%d\n", val);
 
-		if (val < 0 | val > 32)
+		if ((val < 0) | (val > 32))
 			pr_err("Only support range 0 [mute] ~ 32 [maximum]\n");
 		else {
 			temp = dac_read_reg(dac->dac_base, AUDIO_PHY_TXDAC_AFE1)
@@ -563,7 +565,7 @@ static unsigned int cv181xdac_reg_read(struct snd_soc_component *codec, unsigned
 		temp_lval = ((ret & 0x000001ff) + 1) / 16;
 		temp_rval = (((ret >> 16) & 0x000001ff) + 1) / 16;
 		dev_info(dac->dev, "Get DAC Vol reg:%d,ret:0x%x temp_lval=%d.\n", reg, ret, temp_lval);
-		ret = (temp_rval << 16) | temp_lval;
+		ret = (temp_rval<<16)|temp_lval;
 	}
 
 	dev_info(dac->dev, "dac_reg_read reg:%d,ret:%#x.\n", reg, ret);
@@ -584,7 +586,7 @@ static int cv181xdac_reg_write(struct snd_soc_component *codec, unsigned int reg
 			temp_lval = 32;
 		if (temp_rval > 32)
 			temp_rval = 32;
-		value = DAC_VOL_L(temp_lval) | DAC_VOL_R(temp_rval);
+		value = DAC_VOL_L(temp_lval)|DAC_VOL_R(temp_rval);
 	}
 
 	dac_write_reg(dac->dac_base, reg, value);
@@ -592,6 +594,7 @@ static int cv181xdac_reg_write(struct snd_soc_component *codec, unsigned int reg
 
 	return 0;
 }
+
 
 static const struct snd_soc_component_driver soc_component_dev_cv181xdac0 = {
 	.controls = cv181xdac_controls0,
@@ -641,7 +644,7 @@ static int cv181xdac_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 	enum of_gpio_flags flags;
-	const struct snd_soc_component_driver *comp_drv;
+	struct snd_soc_component_driver *comp_drv;
 	unsigned int mute_pin_l =  -EINVAL;
 	unsigned int mute_pin_r =  -EINVAL;
 
@@ -667,9 +670,9 @@ static int cv181xdac_probe(struct platform_device *pdev)
 	}
 
 	mute_pin_l = of_get_named_gpio_flags(pdev->dev.of_node,
-					     "mute-gpio-l", 0, &flags);
+		"mute-gpio-l", 0, &flags);
 	mute_pin_r = of_get_named_gpio_flags(pdev->dev.of_node,
-					     "mute-gpio-r", 0, &flags);
+		"mute-gpio-r", 0, &flags);
 
 	if (!gpio_is_valid(mute_pin_l)) {
 		pr_err("cvitekadac_probe gpio_is_valid mute_pin_l\n");
@@ -708,7 +711,7 @@ static int cv181xdac_probe(struct platform_device *pdev)
 
 static int cv181xdac_remove(struct platform_device *pdev)
 {
-	mute_amp(true);
+	muteAmp(true);
 	dev_dbg(&pdev->dev, "cvitekadac_remove\n");
 	return 0;
 }
@@ -728,7 +731,7 @@ static int cv181xdac_suspend(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct cv181xdac *dac = platform_get_drvdata(pdev);
 
-	mute_amp(true);
+	muteAmp(true);
 	if (!dac->reg_ctx) {
 		dac->reg_ctx = devm_kzalloc(dac->dev, sizeof(struct cv181xdac_context), GFP_KERNEL);
 		if (!dac->reg_ctx)
@@ -751,7 +754,7 @@ static int cv181xdac_resume(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct cv181xdac *dac = platform_get_drvdata(pdev);
 
-	mute_amp(false);
+	muteAmp(false);
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL0, dac->reg_ctx->ctl0);
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_CTRL1, dac->reg_ctx->ctl1);
 	dac_write_reg(dac->dac_base, AUDIO_PHY_TXDAC_AFE0, dac->reg_ctx->afe0);

@@ -35,7 +35,7 @@ static int eld_limit_rates(struct snd_pcm_hw_params *params,
 		c = hw_param_interval_c(params, SNDRV_PCM_HW_PARAM_CHANNELS);
 
 		for (i = drm_eld_sad_count(eld); i > 0; i--, sad += 3) {
-			unsigned int max_channels = sad_max_channels(sad);
+			unsigned max_channels = sad_max_channels(sad);
 
 			/*
 			 * Exclude SADs which do not include the

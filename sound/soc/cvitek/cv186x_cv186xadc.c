@@ -60,7 +60,6 @@ static int cv181x_adc_codec_init(struct snd_soc_pcm_runtime *rtd)
 {
 	return 0;
 }
-
 static struct snd_soc_ops cv181x_adc_ops = {
 	.hw_params = cv181x_adc_hw_params,
 };
@@ -86,6 +85,7 @@ static struct snd_soc_dai_link_component cv181x_adc_codecs[] = {
 		.name = "28109100.adc",
 		.dai_name = "28109100.adc",
 	},
+
 
 };
 
@@ -155,74 +155,77 @@ MODULE_DEVICE_TABLE(of, cvi_audio_match_ids);
 
 static int cv181x_adc_proc_show(struct seq_file *m, void *v)
 {
-//#if 0
-	//void __iomem *i2s0;
-	//void __iomem *adc;
-	//void __iomem *audio_pll;
-	//void __iomem *sdma_pll;
-	//u32 audio_freq;
-	//u32 val1, val2, val3;
-	//u32 temp1, temp2;
+#if 0
+	void __iomem *i2s0;
+	void __iomem *adc;
+	void __iomem *audio_pll;
+	void __iomem *sdma_pll;
+	u32 audio_freq;
+	u32 val1, val2, val3;
+	u32 temp1, temp2;
 
-	//i2s0 = ioremap(0x04100000, 0x100);
-	//adc = ioremap(0x0300A100, 0x100);
-	//audio_pll = ioremap(0x3002854, 0x10);
-	//sdma_pll = ioremap(0x3002004, 0x10);
-	//if (readl(audio_pll) == 0x179EDCFA)
-	//	audio_freq = 22579200;
-	//else if (readl(audio_pll) == 0x249f0000) {
-	//	audio_freq = 16384000;
-	//} else
-	//	audio_freq = 24576000;
+	i2s0 = ioremap(0x04100000, 0x100);
+	adc = ioremap(0x0300A100, 0x100);
+	audio_pll = ioremap(0x3002854, 0x10);
+	sdma_pll = ioremap(0x3002004, 0x10);
+	if (readl(audio_pll) == 0x179EDCFA)
+		audio_freq = 22579200;
+	else if (readl(audio_pll) == 0x249f0000) {
+		audio_freq = 16384000;
+	} else
+		audio_freq = 24576000;
 
-	//seq_puts(m, "\n------------- CVI AI ATTRIBUTE -------------\n");
-	//seq_puts(m, "AiDev    Workmode    SampleRate    BitWidth\n");
-	//val1 = (readl(i2s0) >> 1) & 0x1;
-	//val2 = audio_freq / ((readl(i2s0 + 0x64) >> 16) * ((readl(i2s0 + 0x4) & 0x000001ff) + 1) * 2);
-	//val3 = ((readl(i2s0 + 0x10) >> 1) & 0x3) * 16;
-	//seq_printf(m, "  %d       %s        %6d        %2d\n", 0, val1 == 0 ? "slave" : "master", val2, val3);
-	//seq_puts(m, "\n");
-	//seq_puts(m, "-------------  CVI AI STATUS   -------------\n");
 
-	//val1 = (readl(i2s0 + 0x18));
-	//seq_printf(m, "I2S0 is %s\n", val1 == 1 ? "on" : "off");
-	//seq_puts(m, "\n");
-	//val1 = (readl(sdma_pll) & 0x00000002) >> 1;
-	//seq_printf(m, "SDMA clk is %s\n", val1 == 1 ? "on" : "off");
-	//seq_puts(m, "\n");
+	seq_puts(m, "\n------------- CVI AI ATTRIBUTE -------------\n");
+	seq_puts(m, "AiDev    Workmode    SampleRate    BitWidth\n");
+	val1 = (readl(i2s0) >> 1) & 0x1;
+	val2 = audio_freq / ((readl(i2s0 + 0x64) >> 16) * ((readl(i2s0 + 0x4) & 0x000001ff) + 1) * 2);
+	val3 = ((readl(i2s0 + 0x10) >> 1) & 0x3) * 16;
+	seq_printf(m, "  %d       %s        %6d        %2d\n", 0, val1 == 0 ? "slave" : "master", val2, val3);
+	seq_puts(m, "\n");
+	seq_puts(m, "-------------  CVI AI STATUS   -------------\n");
 
-	//val1 = (readl(adc + AUDIO_PHY_RXADC_CTRL0) &
-	//	(AUDIO_PHY_REG_RXADC_EN_MASK | AUDIO_PHY_REG_I2S_TX_EN_MASK));
-	//seq_printf(m, "ADC is %s (%d)\n", val1 == 3 ? "on" : "off", val1);
-	//seq_puts(m, "\n");
+	val1 = (readl(i2s0 + 0x18));
+	seq_printf(m, "I2S0 is %s\n", val1 == 1 ? "on" : "off");
+	seq_puts(m, "\n");
+	val1 = (readl(sdma_pll) & 0x00000002) >> 1;
+	seq_printf(m, "SDMA clk is %s\n", val1 == 1 ? "on" : "off");
+	seq_puts(m, "\n");
 
-	//val1 = (readl(adc + AUDIO_PHY_RXADC_ANA2) & AUDIO_PHY_REG_MUTEL_RXPGA_MASK);
-	//val2 = (readl(adc + AUDIO_PHY_RXADC_ANA2) & AUDIO_PHY_REG_MUTER_RXPGA_MASK) >> 1;
-	//seq_puts(m, "L-Mute   R-Mute\n");
-	//seq_printf(m, "  %s       %s\n", val1 == 1 ? "yes" : "no", val2 == 1 ? "yes" : "no");
-	//seq_puts(m, "\n");
+	val1 = (readl(adc + AUDIO_PHY_RXADC_CTRL0) &
+		(AUDIO_PHY_REG_RXADC_EN_MASK | AUDIO_PHY_REG_I2S_TX_EN_MASK));
+	seq_printf(m, "ADC is %s (%d)\n", val1 == 3 ? "on" : "off", val1);
+	seq_puts(m, "\n");
 
-	//val1 = (readl(adc + AUDIO_PHY_RXADC_ANA0) & 0xffff);
-	//val2 = (readl(adc + AUDIO_PHY_RXADC_ANA0) & 0xffff0000) >> 16;
+	val1 = (readl(adc + AUDIO_PHY_RXADC_ANA2) & AUDIO_PHY_REG_MUTEL_RXPGA_MASK);
+	val2 = (readl(adc + AUDIO_PHY_RXADC_ANA2) & AUDIO_PHY_REG_MUTER_RXPGA_MASK) >> 1;
+	seq_puts(m, "L-Mute   R-Mute\n");
+	seq_printf(m, "  %s       %s\n", val1 == 1 ? "yes" : "no", val2 == 1 ? "yes" : "no");
+	seq_puts(m, "\n");
 
-	//for (temp1 = 0; temp1 < 25; temp1++) {
-	//	if (val1 == cv181x_adc_vol_list[temp1])
-	//		break;
-	//}
-	//for (temp2 = 0; temp2 < 25; temp2++) {
-	//	if (val2 == cv181x_adc_vol_list[temp2])
-	//		break;
-	//}
+	val1 = (readl(adc + AUDIO_PHY_RXADC_ANA0) & 0xffff);
+	val2 = (readl(adc + AUDIO_PHY_RXADC_ANA0) & 0xffff0000) >> 16;
 
-	//seq_puts(m, "L-Vol           R-Vol\n");
-	//seq_printf(m, "  %d              %d\n", temp1, temp2);
-	//seq_puts(m, "\n");
+	for (temp1 = 0; temp1 < 25; temp1++) {
+		if (val1 == cv181x_adc_vol_list[temp1])
+			break;
+	}
+	for (temp2 = 0; temp2 < 25; temp2++) {
+		if (val2 == cv181x_adc_vol_list[temp2])
+			break;
+	}
 
-	//iounmap(i2s0);
-	//iounmap(adc);
-	//iounmap(audio_pll);
-	//iounmap(sdma_pll);
-//#endif
+	seq_puts(m, "L-Vol           R-Vol\n");
+	seq_printf(m, "  %d              %d\n", temp1, temp2);
+	seq_puts(m, "\n");
+
+
+
+	iounmap(i2s0);
+	iounmap(adc);
+	iounmap(audio_pll);
+	iounmap(sdma_pll);
+#endif
 	return 0;
 }
 
@@ -243,6 +246,7 @@ static int cv181x_adc_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct proc_dir_entry *proc_ai;
 
+
 	dev_info(&pdev->dev, "cviteka_adc_probe, dev name=%s\n", dev_name(&pdev->dev));
 	card = &cv181x_adc;
 
@@ -257,7 +261,7 @@ static int cv181x_adc_probe(struct platform_device *pdev)
 				dev_err(&pdev->dev, "Error creating audio_debug proc folder entry\n");
 		}
 
-		if (proc_audio_dir && proc_ai_not_allocted) {
+		if (proc_audio_dir && (proc_ai_not_allocted == true)) {
 			proc_ai = proc_create_data("cviteka_adc", 0444, proc_audio_dir, &cv181x_adc_proc_ops, np);
 			if (!proc_ai)
 				dev_err(&pdev->dev, "Create cviteka_adc proc failed!\n");
@@ -319,3 +323,7 @@ MODULE_AUTHOR("EthanChen");
 MODULE_DESCRIPTION("ALSA SoC cviteka adc driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:cviteka-adc");
+
+
+
+
