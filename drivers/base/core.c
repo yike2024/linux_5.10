@@ -757,6 +757,7 @@ static void device_link_add_missing_supplier_links(void)
 	list_for_each_entry_safe(dev, tmp, &wait_for_suppliers,
 				 links.needs_suppliers) {
 		int ret = fwnode_call_int_op(dev->fwnode, add_links, dev);
+
 		if (!ret)
 			list_del_init(&dev->links.needs_suppliers);
 		else if (ret != -ENODEV || fw_devlink_is_permissive())
@@ -1717,6 +1718,7 @@ ssize_t device_show_ulong(struct device *dev,
 			  char *buf)
 {
 	struct dev_ext_attribute *ea = to_ext_attr(attr);
+
 	return sysfs_emit(buf, "%lx\n", *(unsigned long *)(ea->var));
 }
 EXPORT_SYMBOL_GPL(device_show_ulong);
@@ -1843,6 +1845,7 @@ static int dev_uevent_filter(struct kset *kset, struct kobject *kobj)
 
 	if (ktype == &device_ktype) {
 		struct device *dev = kobj_to_dev(kobj);
+
 		if (dev->bus)
 			return 1;
 		if (dev->class)
@@ -2353,6 +2356,7 @@ int device_create_bin_file(struct device *dev,
 			   const struct bin_attribute *attr)
 {
 	int error = -EINVAL;
+
 	if (dev)
 		error = sysfs_create_bin_file(&dev->kobj, attr);
 	return error;
@@ -2454,6 +2458,7 @@ struct class_dir {
 static void class_dir_release(struct kobject *kobj)
 {
 	struct class_dir *dir = to_class_dir(kobj);
+
 	kfree(dir);
 }
 
@@ -2461,6 +2466,7 @@ static const
 struct kobj_ns_type_operations *class_dir_child_ns_type(struct kobject *kobj)
 {
 	struct class_dir *dir = to_class_dir(kobj);
+
 	return dir->class->ns_type;
 }
 
@@ -2646,7 +2652,7 @@ static int device_add_class_symlinks(struct device *dev)
 	if (of_node) {
 		error = sysfs_create_link(&dev->kobj, of_node_kobj(of_node), "of_node");
 		if (error)
-			dev_warn(dev, "Error %d creating of_node link\n",error);
+			dev_warn(dev, "Error %d creating of_node link\n", error);
 		/* An error here doesn't warrant bringing down the device */
 	}
 
@@ -4246,15 +4252,15 @@ define_dev_printk_level(_dev_info, KERN_INFO);
  * checked later by reading devices_deferred debugfs attribute.
  * It replaces code sequence::
  *
- * 	if (err != -EPROBE_DEFER)
- * 		dev_err(dev, ...);
- * 	else
- * 		dev_dbg(dev, ...);
- * 	return err;
+ *	if (err != -EPROBE_DEFER)
+ *		dev_err(dev, ...);
+ *	else
+ *		dev_dbg(dev, ...);
+ *	return err;
  *
  * with::
  *
- * 	return dev_err_probe(dev, err, ...);
+ *	return dev_err_probe(dev, err, ...);
  *
  * Returns @err.
  *

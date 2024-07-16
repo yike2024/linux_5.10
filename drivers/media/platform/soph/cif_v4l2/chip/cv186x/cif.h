@@ -23,7 +23,7 @@
 #include <generated/compile.h>
 #include <linux/io.h>
 #include <linux/clk.h>
-#include <linux/cvi_defines.h>
+#include <linux/defines.h>
 #ifdef __CV181X__
 #include "pinctrl-cv181x.h"
 #elif defined(__CV180X__)
@@ -52,9 +52,9 @@
 #define SYNC_CODE_NUM	4
 #define BT_DEMUX_NUM	4
 #define MIPI_DEMUX_NUM	4
-#define CVI_CIF_PAD_MAX 2
-#define CVI_CIF_SRC_PADS 4
-#define CVI_CIF_EVENT_ELEMS 4
+#define CIF_PAD_MAX 2
+#define CIF_SRC_PADS 4
+#define CIF_EVENT_ELEMS 4
 #define MAX_PAD_NUM			28
 
 #ifndef DEVICE_FROM_DTS
@@ -314,21 +314,21 @@ enum raw_data_type_e {
 };
 
 enum mipi_wdr_mode_e {
-	CVI_MIPI_WDR_MODE_NONE = 0,
-	CVI_MIPI_WDR_MODE_VC,
-	CVI_MIPI_WDR_MODE_DT,
-	CVI_MIPI_WDR_MODE_DOL,
-	CVI_MIPI_WDR_MODE_MANUAL,  /* SOI case */
-	CVI_MIPI_WDR_MODE_BUTT
+	MIPI_WDR_MODE_NONE = 0,
+	MIPI_WDR_MODE_VC,
+	MIPI_WDR_MODE_DT,
+	MIPI_WDR_MODE_DOL,
+	MIPI_WDR_MODE_MANUAL,  /* SOI case */
+	MIPI_WDR_MODE_BUTT
 };
 
 enum wdr_mode_e {
-	CVI_WDR_MODE_NONE = 0,
-	CVI_WDR_MODE_2F,
-	CVI_WDR_MODE_3F,
-	CVI_WDR_MODE_DOL_2F,
-	CVI_WDR_MODE_DOL_3F,
-	CVI_WDR_MODE_DOL_BUTT
+	CIF_WDR_MODE_NONE = 0,
+	CIF_WDR_MODE_2F,
+	CIF_WDR_MODE_3F,
+	CIF_WDR_MODE_DOL_2F,
+	CIF_WDR_MODE_DOL_3F,
+	CIF_WDR_MODE_DOL_BUTT
 };
 
 enum lvds_sync_mode_e {
@@ -670,63 +670,63 @@ typedef struct sns_rst_config {
 	enum sns_rst_active_e	gpio_active;
 } SNS_RST_CONFIG;
 
-#define CVI_MIPI_IOC_MAGIC		'm'
+#define MIPI_IOC_MAGIC		'm'
 
 /* Support commands */
-#define CVI_MIPI_SET_DEV_ATTR		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_DEV_ATTR		_IOW(MIPI_IOC_MAGIC, \
 						0x01, struct combo_dev_attr_s)
-#define CVI_MIPI_SET_OUTPUT_CLK_EDGE	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_OUTPUT_CLK_EDGE	_IOW(MIPI_IOC_MAGIC, \
 						0x02, struct clk_edge_s)
-#define CVI_MIPI_RESET_SENSOR		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_RESET_SENSOR		_IOW(MIPI_IOC_MAGIC, \
 						0x05, struct sns_rst_config)
-#define CVI_MIPI_UNRESET_SENSOR		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_UNRESET_SENSOR		_IOW(MIPI_IOC_MAGIC, \
 						0x06, struct sns_rst_config)
-#define CVI_MIPI_RESET_MIPI		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_RESET_MIPI			_IOW(MIPI_IOC_MAGIC, \
 						0x07, unsigned int)
-#define CVI_MIPI_ENABLE_SENSOR_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_ENABLE_SENSOR_CLOCK	_IOW(MIPI_IOC_MAGIC, \
 						0x10, unsigned int)
-#define CVI_MIPI_DISABLE_SENSOR_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_DISABLE_SENSOR_CLOCK	_IOW(MIPI_IOC_MAGIC, \
 						0x11, unsigned int)
-#define CVI_MIPI_SET_CROP_TOP		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_CROP_TOP		_IOW(MIPI_IOC_MAGIC, \
 						0x20, struct crop_top_s)
-#define CVI_MIPI_SET_WDR_MANUAL		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_WDR_MANUAL		_IOW(MIPI_IOC_MAGIC, \
 						0x21, struct manual_wdr_s)
-#define CVI_MIPI_SET_LVDS_FP_VS		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_LVDS_FP_VS		_IOW(MIPI_IOC_MAGIC, \
 						0x22, struct vsync_gen_s)
-#define CVI_MIPI_RESET_LVDS		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_RESET_LVDS			_IOW(MIPI_IOC_MAGIC, \
 						0x23, unsigned int)
-#define CVI_MIPI_SET_BT_FMT_OUT		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_BT_FMT_OUT		_IOW(MIPI_IOC_MAGIC, \
 						0x24, struct bt_fmt_out_s)
-#define CVI_MIPI_GET_CIF_ATTR		_IOWR(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_GET_CIF_ATTR		_IOWR(MIPI_IOC_MAGIC, \
 						0x25, struct cif_attr_s)
-#define CVI_MIPI_SET_SENSOR_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_SENSOR_CLOCK		_IOW(MIPI_IOC_MAGIC, \
 						0x26, struct mclk_pll_s)
-#define CVI_MIPI_SET_MAX_MAC_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_MAX_MAC_CLOCK		_IOW(MIPI_IOC_MAGIC, \
 						0x27, unsigned int)
-#define CVI_MIPI_SET_CROP_WINDOW	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_CROP_WINDOW		_IOW(MIPI_IOC_MAGIC, \
 						0x28, struct cif_crop_win_s)
-#define CVI_MIPI_SET_YUV_SWAP		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_YUV_SWAP		_IOW(MIPI_IOC_MAGIC, \
 						0x29, struct cif_yuv_swap_s)
 /* Unsupport commands */
-#define CVI_MIPI_SET_PHY_CMVMODE	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_PHY_CMVMODE		_IOW(MIPI_IOC_MAGIC, \
 						0x04, unsigned int)
-#define CVI_MIPI_UNRESET_MIPI		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_UNRESET_MIPI		_IOW(MIPI_IOC_MAGIC, \
 						0x08, unsigned int)
-#define CVI_MIPI_RESET_SLVS		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_RESET_SLVS			_IOW(MIPI_IOC_MAGIC, \
 						0x09, unsigned int)
-#define CVI_MIPI_UNRESET_SLVS		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_UNRESET_SLVS		_IOW(MIPI_IOC_MAGIC, \
 						0x0A, unsigned int)
-#define CVI_MIPI_SET_HS_MODE		_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_SET_HS_MODE		_IOW(MIPI_IOC_MAGIC, \
 						0x0B, unsigned int)
-#define CVI_MIPI_ENABLE_MIPI_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_ENABLE_MIPI_CLOCK		_IOW(MIPI_IOC_MAGIC, \
 						0x0C, unsigned int)
-#define CVI_MIPI_DISABLE_MIPI_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_DISABLE_MIPI_CLOCK		_IOW(MIPI_IOC_MAGIC, \
 						0x0D, unsigned int)
-#define CVI_MIPI_ENABLE_SLVS_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_ENABLE_SLVS_CLOCK		_IOW(MIPI_IOC_MAGIC, \
 						0x0E, unsigned int)
-#define CVI_MIPI_DISABLE_SLVS_CLOCK	_IOW(CVI_MIPI_IOC_MAGIC, \
+#define MIPI_DISABLE_SLVS_CLOCK		_IOW(MIPI_IOC_MAGIC, \
 						0x0F, unsigned int)
-#endif // _U_CVI_VIP_CIF_H_
+#endif // _U_VIP_CIF_H_
 
 
 int cif_start_stream(struct cvi_cif_dev *dev, struct combo_dev_attr_s *attr);

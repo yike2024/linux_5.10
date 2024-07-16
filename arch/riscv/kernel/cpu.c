@@ -11,13 +11,15 @@
 #define HARTID_MAGIC 'h'
 #define HARTID_GET_NUM _IOR(HARTID_MAGIC, 1, int)
 
-long hartid_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+long hartid_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
 	int hartid;
+
 	switch (cmd) {
 	case HARTID_GET_NUM:
 		hartid = boot_cpu_hartid;
 		if (copy_to_user((int __user *)arg, &hartid, sizeof(hartid)))
-		return -EFAULT;
+			return -EFAULT;
 		break;
 	default:
 		return -ENOTTY;

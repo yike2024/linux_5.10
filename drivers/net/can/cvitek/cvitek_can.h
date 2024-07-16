@@ -30,6 +30,9 @@
 
 #define SD1_D1_PINMUX 0x28104b40
 #define PULL_DOWN_EN 0x8
+/* CAN STD mode */
+#define CAN_CTRLMODE_STD 0x100
+
 struct sdvt_can_classdev;
 struct sdvt_can_command;
 struct sdvt_can_config;

@@ -1,8 +1,8 @@
 #include "isp_dev.h"
 
-static inline struct cvi_isp_device *sd_to_isp_dev(struct v4l2_subdev *sd)
+static inline struct sop_isp_device *sd_to_isp_dev(struct v4l2_subdev *sd)
 {
-	return container_of(sd->v4l2_dev, struct cvi_isp_device, v4l2_dev);
+	return container_of(sd->v4l2_dev, struct sop_isp_device, v4l2_dev);
 }
 
 /* Get cif subdev by enabled media link */
@@ -78,14 +78,14 @@ static struct v4l2_subdev *get_remote_sensor(struct v4l2_subdev *sd, int pad_id)
 }
 
 /***************************** isp sub-devs *******************************/
-static int cvi_isp_sd_enum_mbus_code(struct v4l2_subdev *sd,
+static int sop_isp_sd_enum_mbus_code(struct v4l2_subdev *sd,
 					struct v4l2_subdev_pad_config *cfg,
 					struct v4l2_subdev_mbus_code_enum *code)
 {
 	return 0;
 }
 
-static int cvi_isp_sd_get_fmt(struct v4l2_subdev *sd,
+static int sop_isp_sd_get_fmt(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_format *fmt)
 {
@@ -102,7 +102,7 @@ static int cvi_isp_sd_get_fmt(struct v4l2_subdev *sd,
 	return ret;
 }
 
-static int cvi_isp_sd_enum_frame_size(struct v4l2_subdev *sd,
+static int sop_isp_sd_enum_frame_size(struct v4l2_subdev *sd,
 				   struct v4l2_subdev_pad_config *cfg,
 				   struct v4l2_subdev_frame_size_enum *fse)
 {
@@ -114,7 +114,7 @@ static int cvi_isp_sd_enum_frame_size(struct v4l2_subdev *sd,
 	return ret;
 }
 
-static int cvi_isp_sd_set_fmt(struct v4l2_subdev *sd,
+static int sop_isp_sd_set_fmt(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_format *fmt)
 {
@@ -122,7 +122,7 @@ static int cvi_isp_sd_set_fmt(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int cvi_isp_sd_get_selection(struct v4l2_subdev *sd,
+static int sop_isp_sd_get_selection(struct v4l2_subdev *sd,
 				      struct v4l2_subdev_pad_config *cfg,
 				      struct v4l2_subdev_selection *sel)
 {
@@ -130,7 +130,7 @@ static int cvi_isp_sd_get_selection(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int cvi_isp_sd_set_selection(struct v4l2_subdev *sd,
+static int sop_isp_sd_set_selection(struct v4l2_subdev *sd,
 				      struct v4l2_subdev_pad_config *cfg,
 				      struct v4l2_subdev_selection *sel)
 {
@@ -138,7 +138,7 @@ static int cvi_isp_sd_set_selection(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int cvi_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
+static int sop_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
 {
 	struct v4l2_subdev *remote_sd = get_remote_sd(sd);
 
@@ -153,9 +153,9 @@ static int cvi_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
 	return 0;
 }
 
-static int cvi_isp_sd_s_power(struct v4l2_subdev *sd, int on)
+static int sop_isp_sd_s_power(struct v4l2_subdev *sd, int on)
 {
-	struct cvi_isp_device *isp_dev = sd_to_isp_dev(sd);
+	struct sop_isp_device *isp_dev = sd_to_isp_dev(sd);
 	struct v4l2_subdev *remote_cif = get_remote_sd(sd);
 	struct v4l2_subdev *remote_sensor;
 	int ret = 0;
@@ -192,7 +192,7 @@ static int cvi_isp_sd_s_power(struct v4l2_subdev *sd, int on)
 	return ret;
 }
 
-static int cvi_isp_subdev_link_setup(struct media_entity *entity,
+static int sop_isp_subdev_link_setup(struct media_entity *entity,
 				    const struct media_pad *local,
 				    const struct media_pad *remote,
 				    u32 flags)
@@ -200,13 +200,13 @@ static int cvi_isp_subdev_link_setup(struct media_entity *entity,
 	return 0;
 }
 
-static int cvi_isp_subdev_link_validate(struct media_link *link)
+static int sop_isp_subdev_link_validate(struct media_link *link)
 {
 	return v4l2_subdev_link_validate(link);
 }
 
 #ifdef CONFIG_MEDIA_CONTROLLER
-static int cvi_isp_subdev_fmt_link_validate(struct v4l2_subdev *sd,
+static int sop_isp_subdev_fmt_link_validate(struct v4l2_subdev *sd,
 			     struct media_link *link,
 			     struct v4l2_subdev_format *source_fmt,
 			     struct v4l2_subdev_format *sink_fmt)
@@ -224,7 +224,7 @@ static int cvi_isp_subdev_fmt_link_validate(struct v4l2_subdev *sd,
 #endif
 
 void
-cvi_isp_queue_event_sof(struct cvi_isp_subdev *isp)
+sop_isp_queue_event_sof(struct sop_isp_subdev *isp)
 {
 	struct v4l2_event event = {
 		.type = V4L2_EVENT_FRAME_SYNC,
@@ -235,7 +235,7 @@ cvi_isp_queue_event_sof(struct cvi_isp_subdev *isp)
 	v4l2_event_queue(isp->sd.devnode, &event);
 }
 
-static int cvi_isp_sd_subs_evt(struct v4l2_subdev *sd, struct v4l2_fh *fh,
+static int sop_isp_sd_subs_evt(struct v4l2_subdev *sd, struct v4l2_fh *fh,
 				  struct v4l2_event_subscription *sub)
 {
 	if (sub->type != V4L2_EVENT_FRAME_SYNC)
@@ -248,68 +248,77 @@ static int cvi_isp_sd_subs_evt(struct v4l2_subdev *sd, struct v4l2_fh *fh,
 	return v4l2_event_subscribe(fh, sub, ISP_V4L2_EVENT_ELEMS, NULL);
 }
 
-static long cvi_isp_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
+static long sop_isp_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	long ret = 0;
 
 	return ret;
 }
 
-static const struct v4l2_subdev_pad_ops cvi_isp_sd_pad_ops = {
-	.enum_mbus_code = cvi_isp_sd_enum_mbus_code,
-	.get_selection = cvi_isp_sd_get_selection,
-	.set_selection = cvi_isp_sd_set_selection,
-	.enum_frame_size = cvi_isp_sd_enum_frame_size,
-	.get_fmt = cvi_isp_sd_get_fmt,
-	.set_fmt = cvi_isp_sd_set_fmt,
-#ifdef CONFIG_MEDIA_CONTROLLER
-	.link_validate = cvi_isp_subdev_fmt_link_validate,
-#endif
-};
-
-static const struct media_entity_operations cvi_isp_sd_media_ops = {
-	.link_setup = cvi_isp_subdev_link_setup,
-	.link_validate = cvi_isp_subdev_link_validate,
-};
-
-static const struct v4l2_subdev_video_ops cvi_isp_sd_video_ops = {
-	.s_stream = cvi_isp_sd_s_stream,
-};
-
-static const struct v4l2_subdev_core_ops cvi_isp_core_ops = {
-	.subscribe_event = cvi_isp_sd_subs_evt,
-	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
-	.s_power = cvi_isp_sd_s_power,
-	.ioctl = cvi_isp_ioctl,
 #ifdef CONFIG_COMPAT
-	.compat_ioctl32 = cvi_isp_compat_ioctl32,
+static long sop_isp_compat_ioctl32(struct v4l2_subdev *sd, unsigned int cmd, unsigned long arg)
+{
+	long ret = 0;
+
+	return ret;
+}
+#endif
+
+static const struct v4l2_subdev_pad_ops sop_isp_sd_pad_ops = {
+	.enum_mbus_code = sop_isp_sd_enum_mbus_code,
+	.get_selection = sop_isp_sd_get_selection,
+	.set_selection = sop_isp_sd_set_selection,
+	.enum_frame_size = sop_isp_sd_enum_frame_size,
+	.get_fmt = sop_isp_sd_get_fmt,
+	.set_fmt = sop_isp_sd_set_fmt,
+#ifdef CONFIG_MEDIA_CONTROLLER
+	.link_validate = sop_isp_subdev_fmt_link_validate,
 #endif
 };
 
-static struct v4l2_subdev_ops cvi_isp_sd_ops = {
-	.core = &cvi_isp_core_ops,
-	.video = &cvi_isp_sd_video_ops,
-	.pad = &cvi_isp_sd_pad_ops,
+static const struct media_entity_operations sop_isp_sd_media_ops = {
+	.link_setup = sop_isp_subdev_link_setup,
+	.link_validate = sop_isp_subdev_link_validate,
 };
 
-int isp_subdev_register(struct cvi_isp_device *isp_dev)
+static const struct v4l2_subdev_video_ops sop_isp_sd_video_ops = {
+	.s_stream = sop_isp_sd_s_stream,
+};
+
+static const struct v4l2_subdev_core_ops sop_isp_core_ops = {
+	.subscribe_event = sop_isp_sd_subs_evt,
+	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
+	.s_power = sop_isp_sd_s_power,
+	.ioctl = sop_isp_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl32 = sop_isp_compat_ioctl32,
+#endif
+};
+
+static struct v4l2_subdev_ops sop_isp_sd_ops = {
+	.core = &sop_isp_core_ops,
+	.video = &sop_isp_sd_video_ops,
+	.pad = &sop_isp_sd_pad_ops,
+};
+
+int isp_subdev_register(struct sop_isp_device *isp_dev)
 {
-	struct cvi_isp_subdev *isp_sdev = &isp_dev->isp_sdev;
+	struct sop_isp_subdev *isp_sdev = &isp_dev->isp_sdev;
 	struct v4l2_device *v4l2_dev =  &isp_dev->v4l2_dev;
 	struct v4l2_subdev *sd = &isp_sdev->sd;
 	int ret;
 
-	v4l2_subdev_init(sd, &cvi_isp_sd_ops);
+	v4l2_subdev_init(sd, &sop_isp_sd_ops);
 	sd->owner = THIS_MODULE;
 	sd->grp_id = GRP_ID_ISP;
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
-	sd->entity.ops = &cvi_isp_sd_media_ops;
+	sd->entity.ops = &sop_isp_sd_media_ops;
 	sd->entity.function = MEDIA_INTF_T_V4L_SUBDEV;
 	snprintf(sd->name, sizeof(sd->name), ISP_SUBDEV_NAME);
 
-	isp_sdev->pads[CVI_ISP_PAD_SINK].flags =
+	isp_sdev->pads[ISP_PAD_SINK].flags =
 		MEDIA_PAD_FL_SINK | MEDIA_PAD_FL_MUST_CONNECT;
-	isp_sdev->pads[CVI_ISP_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
+	isp_sdev->pads[ISP_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
 	ret = media_entity_pads_init(&sd->entity, 1, isp_sdev->pads);
 	if (ret < 0) {
 		v4l2_err(sd, "Failed to init isp pads\n");
@@ -333,7 +342,7 @@ err_cleanup_media_entity:
 	return ret;
 }
 
-void isp_subdev_unregister(struct cvi_isp_device *isp_dev)
+void isp_subdev_unregister(struct sop_isp_device *isp_dev)
 {
 	struct v4l2_subdev *sd = &isp_dev->isp_sdev.sd;
 

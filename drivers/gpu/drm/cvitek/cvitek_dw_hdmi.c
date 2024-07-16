@@ -230,19 +230,45 @@ static int dw_hdmi_cvitek_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static void dw_hdmi_cvitek_shutdown(struct platform_device *pdev)
+{
+	struct cvitek_hdmi *hdmi = dev_get_drvdata(&pdev->dev);
+
+	if (!hdmi)
+		return;
+
+	dw_hdmi_suspend(hdmi->hdmi);
+	pm_runtime_put_sync(&pdev->dev);
+}
+
+static int dw_hdmi_cvitek_suspend(struct device *dev)
+{
+	struct cvitek_hdmi *hdmi = dev_get_drvdata(dev);
+
+	dw_hdmi_suspend(hdmi->hdmi);
+	pm_runtime_put_sync(dev);
+
+	return 0;
+}
+
 static int dw_hdmi_cvitek_resume(struct device *dev)
 {
+	struct cvitek_hdmi *hdmi = dev_get_drvdata(dev);
+
+	dw_hdmi_resume(hdmi->hdmi);
 	pm_runtime_get_sync(dev);
+
 	return 0;
 }
 
 static const struct dev_pm_ops dw_hdmi_cvitek_pm = {
-	SET_SYSTEM_SLEEP_PM_OPS(NULL, dw_hdmi_cvitek_resume)
+	SET_SYSTEM_SLEEP_PM_OPS(dw_hdmi_cvitek_suspend, dw_hdmi_cvitek_resume)
 };
 
 struct platform_driver dw_hdmi_cvitek_pltfm_driver = {
 	.probe  = dw_hdmi_cvitek_probe,
 	.remove = dw_hdmi_cvitek_remove,
+	.shutdown = dw_hdmi_cvitek_shutdown,
 	.driver = {
 		.name = "dw_hdmi_cvitek",
 		.pm = &dw_hdmi_cvitek_pm,

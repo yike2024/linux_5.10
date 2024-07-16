@@ -435,15 +435,15 @@ const char *_to_string_raw_data_type(enum raw_data_type_e raw_data_type)
 const char *_to_string_mipi_wdr_mode(enum mipi_wdr_mode_e wdr)
 {
 	switch (wdr) {
-	case CVI_MIPI_WDR_MODE_NONE:
+	case MIPI_WDR_MODE_NONE:
 		return "NONE";
-	case CVI_MIPI_WDR_MODE_VC:
+	case MIPI_WDR_MODE_VC:
 		return "VC";
-	case CVI_MIPI_WDR_MODE_DT:
+	case MIPI_WDR_MODE_DT:
 		return "DT";
-	case CVI_MIPI_WDR_MODE_DOL:
+	case MIPI_WDR_MODE_DOL:
 		return "DOL";
-	case CVI_MIPI_WDR_MODE_MANUAL:
+	case MIPI_WDR_MODE_MANUAL:
 		return "MANUAL";
 	default:
 		return "unknown";
@@ -453,15 +453,15 @@ const char *_to_string_mipi_wdr_mode(enum mipi_wdr_mode_e wdr)
 const char *_to_string_wdr_mode(enum wdr_mode_e wdr)
 {
 	switch (wdr) {
-	case CVI_WDR_MODE_NONE:
+	case CIF_WDR_MODE_NONE:
 		return "NONE";
-	case CVI_WDR_MODE_2F:
+	case CIF_WDR_MODE_2F:
 		return "2To1";
-	case CVI_WDR_MODE_3F:
+	case CIF_WDR_MODE_3F:
 		return "3To1";
-	case CVI_WDR_MODE_DOL_2F:
+	case CIF_WDR_MODE_DOL_2F:
 		return "DOL2To1";
-	case CVI_WDR_MODE_DOL_3F:
+	case CIF_WDR_MODE_DOL_3F:
 		return "DOL3To1";
 	default:
 		return "unknown";
@@ -1500,24 +1500,24 @@ static int _cif_set_attr_mipi(struct cvi_cif_dev *dev,
 		cif_set_hs_settle(ctx, attr->dphy.hs_settle);
 	/* config the wdr mode. */
 	switch (attr->wdr_mode) {
-	case CVI_MIPI_WDR_MODE_NONE:
+	case MIPI_WDR_MODE_NONE:
 		break;
-	case CVI_MIPI_WDR_MODE_DT:
+	case MIPI_WDR_MODE_DT:
 		csi->hdr_mode = CSI_HDR_MODE_DT;
 		for (i = 0; i < MAX_WDR_FRAME_NUM; i++)
 			csi->data_type[i] = attr->data_type[i];
 		break;
-	case CVI_MIPI_WDR_MODE_MANUAL:
+	case MIPI_WDR_MODE_MANUAL:
 		param->hdr_manual = combo->wdr_manu.manual_en;
 		param->hdr_shift = combo->wdr_manu.l2s_distance;
 		param->hdr_vsize = combo->wdr_manu.lsef_length;
 		param->hdr_rm_padding = combo->wdr_manu.discard_padding_lines;
 		cif_hdr_manual_config(ctx, param, !!combo->wdr_manu.update);
 		break;
-	case CVI_MIPI_WDR_MODE_VC:
+	case MIPI_WDR_MODE_VC:
 		csi->hdr_mode = CSI_HDR_MODE_VC;
 		break;
-	case CVI_MIPI_WDR_MODE_DOL:
+	case MIPI_WDR_MODE_DOL:
 		csi->hdr_mode = CSI_HDR_MODE_DOL;
 		break;
 	default:
@@ -1534,7 +1534,7 @@ static int _cif_set_attr_mipi(struct cvi_cif_dev *dev,
 		}
 	}
 
-	param->hdr_en = (attr->wdr_mode != CVI_MIPI_WDR_MODE_NONE);
+	param->hdr_en = (attr->wdr_mode != MIPI_WDR_MODE_NONE);
 	cif_streaming(ctx, 1, param->hdr_en);
 
 	return 0;
@@ -1780,13 +1780,13 @@ static int _cif_set_attr_sublvds(struct cvi_cif_dev *dev,
 
 	/* config the wdr */
 	switch (attr->wdr_mode) {
-	case CVI_WDR_MODE_NONE:
+	case CIF_WDR_MODE_NONE:
 		/* [TODO] use other api to set the fp */
 		link->distance_fp = 6;
 		cif_set_lvds_vsync_gen(ctx, 6);
 		break;
-	case CVI_WDR_MODE_DOL_2F:
-	case CVI_WDR_MODE_DOL_3F:
+	case CIF_WDR_MODE_DOL_2F:
+	case CIF_WDR_MODE_DOL_3F:
 		/* [TODO] 3 exposure hdr hw is not ready. */
 		/* config th Vsync type */
 		rc = _cif_set_lvds_vsync_type(ctx, attr, sublvds);
@@ -1796,9 +1796,9 @@ static int _cif_set_attr_sublvds(struct cvi_cif_dev *dev,
 	default:
 		return -EINVAL;
 	}
-	param->hdr_en = (attr->wdr_mode != CVI_WDR_MODE_NONE);
+	param->hdr_en = (attr->wdr_mode != CIF_WDR_MODE_NONE);
 	/* [TODO] config the fid type. */
-	cif_streaming(ctx, 1, attr->wdr_mode != CVI_WDR_MODE_NONE);
+	cif_streaming(ctx, 1, attr->wdr_mode != CIF_WDR_MODE_NONE);
 
 	return 0;
 }
@@ -1998,9 +1998,9 @@ static int _cif_set_attr_hispi(struct cvi_cif_dev *dev,
 
 	/* config the wdr */
 	switch (attr->wdr_mode) {
-	case CVI_WDR_MODE_NONE:
-	case CVI_WDR_MODE_2F:
-	case CVI_WDR_MODE_3F: /* [TODO] 3 exposure hdr hw is not ready. */
+	case CIF_WDR_MODE_NONE:
+	case CIF_WDR_MODE_2F:
+	case CIF_WDR_MODE_3F: /* [TODO] 3 exposure hdr hw is not ready. */
 		break;
 	default:
 		return -EINVAL;
@@ -2010,9 +2010,9 @@ static int _cif_set_attr_hispi(struct cvi_cif_dev *dev,
 	if (rc < 0)
 		return rc;
 
-	param->hdr_en = (attr->wdr_mode != CVI_WDR_MODE_NONE);
+	param->hdr_en = (attr->wdr_mode != CIF_WDR_MODE_NONE);
 	/* [TODO] config the fid type. */
-	cif_streaming(ctx, 1, attr->wdr_mode != CVI_WDR_MODE_NONE);
+	cif_streaming(ctx, 1, attr->wdr_mode != CIF_WDR_MODE_NONE);
 
 	return 0;
 }

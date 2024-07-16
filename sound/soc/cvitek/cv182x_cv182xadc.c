@@ -61,6 +61,7 @@ static int cv182x_adc_codec_init(struct snd_soc_pcm_runtime *rtd)
 {
 	return 0;
 }
+
 static struct snd_soc_ops cv182x_adc_ops = {
 	.hw_params = cv182x_adc_hw_params,
 };
@@ -108,7 +109,6 @@ static struct snd_soc_card cv182x_adc = {
 
 };
 
-
 static const struct of_device_id cvi_audio_match_ids[] = {
 	{
 		.compatible = "cvitek,cv182x-adc",
@@ -137,12 +137,12 @@ static int cv182x_adc_proc_show(struct seq_file *m, void *v)
 	else
 		audio_freq = 24576000;
 
-
 	seq_puts(m, "\n------------- CVI AI ATTRIBUTE -------------\n");
 	seq_puts(m, "AiDev    Workmode    SampleRate    BitWidth\n");
 	val1 = (readl(i2s0) >> 1) & 0x1;
 	//samplerate = audio_freq/(mclk_div * CIC_mask * 64 * cofe(4))
-	val2 = audio_freq / ((readl(i2s0 + 0x64) & 0x0000ffff)*((readl(adc + AUDIO_PHY_RXADC_CTRL1) & 0x1) + 1)*64*4);
+	val2 = audio_freq / ((readl(i2s0 + 0x64) & 0x0000ffff) *
+	       ((readl(adc + AUDIO_PHY_RXADC_CTRL1) & 0x1) + 1) * 64 * 4);
 	val3 = ((readl(i2s0 + 0x10) >> 1) & 0x3) * 16;
 	seq_printf(m, "  %d       %s        %6d        %2d\n", 0, val1 == 0 ? "slave" : "master", val2, val3);
 	seq_puts(m, "\n");
@@ -182,8 +182,6 @@ static int cv182x_adc_proc_show(struct seq_file *m, void *v)
 	seq_printf(m, "  %d              %d\n", temp1, temp2);
 	seq_puts(m, "\n");
 
-
-
 	iounmap(i2s0);
 	iounmap(adc);
 	iounmap(audio_pll);
@@ -202,13 +200,11 @@ static const struct proc_ops cv182x_adc_proc_ops = {
 	.proc_release	= single_release,
 };
 
-
 static int cv182x_adc_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card;
 	struct device_node *np = pdev->dev.of_node;
 	struct proc_dir_entry *proc_ai;
-
 
 	dev_info(&pdev->dev, "%s, dev name=%s\n", __func__, dev_name(&pdev->dev));
 	card = &cv182x_adc;
@@ -224,7 +220,7 @@ static int cv182x_adc_probe(struct platform_device *pdev)
 				dev_err(&pdev->dev, "Error creating audio_debug proc folder entry\n");
 		}
 
-		if (proc_audio_dir && (proc_ai_not_allocted == true)) {
+		if (proc_audio_dir && proc_ai_not_allocted) {
 			proc_ai = proc_create_data("cv182x_adc", 0444, proc_audio_dir, &cv182x_adc_proc_ops, np);
 			if (!proc_ai)
 				dev_err(&pdev->dev, "Create cv182x_adc proc failed!\n");

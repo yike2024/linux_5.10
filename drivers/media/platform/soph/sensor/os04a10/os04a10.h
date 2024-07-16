@@ -19,7 +19,7 @@ static s64 os04a10_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		0,                      //2:mclk num
 		RX_MAC_CLK_400M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
-		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
+		MIPI_WDR_MODE_NONE,     //5:wdr mode
 		RAW_DATA_10BIT,         //6:data type
 		0,                      //7:mipi_dev
 		0,                      //8:dphy.enable
@@ -42,7 +42,7 @@ static s64 os04a10_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		1,                      //2:mclk num
 		RX_MAC_CLK_400M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
-		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
+		MIPI_WDR_MODE_NONE,     //5:wdr mode
 		RAW_DATA_10BIT,         //6:data type
 		4,                      //7:mipi_dev
 		0,                      //8:dphy.enable

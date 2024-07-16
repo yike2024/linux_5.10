@@ -21,7 +21,7 @@
 #include <linux/pinctrl/consumer.h>
 #include <linux/gpio/consumer.h>
 
-#include <linux/cif_uapi.h>
+#include <linux/comm_cif.h>
 #include <linux/sns_v4l2_uapi.h>
 
 #include "os08b10.h"
@@ -41,7 +41,7 @@
 #define OS08B10_SNS_TYPE_SDR V4L2_OV_OS08B10_MIPI_8M_30FPS_10BIT
 #define OS08B10_SNS_TYPE_WDR V4L2_OV_OS08B10_MIPI_8M_30FPS_10BIT_WDR2TO1
 
-static const enum mipi_wdr_mode_e os08b10_wdr_mode = CVI_MIPI_WDR_MODE_VC;
+static const enum mipi_wdr_mode_e os08b10_wdr_mode = MIPI_WDR_MODE_VC;
 
 static int os08b10_count;
 static int force_bus[MAX_SENSOR_DEVICE] = {[0 ... (MAX_SENSOR_DEVICE - 1)] = -1};
@@ -82,7 +82,7 @@ static struct os08b10_mode supported_modes[] = {
 		.exp_def = 0x0140,
 		.hts_def = 0x054B,
 		.vts_def = 0x0453,
-		.mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE,
+		.mipi_wdr_mode = MIPI_WDR_MODE_NONE,
 		.max_fps = {
 			.numerator = 10000,
 			.denominator = 300000,
@@ -270,6 +270,21 @@ static int enum_mbus_code(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int enum_frame_interval(struct v4l2_subdev *sd,
+			      struct v4l2_subdev_pad_config *cfg,
+			      struct v4l2_subdev_frame_interval_enum *fie)
+{
+	struct os08b10 *os08b10 = to_os08b10(sd);
+
+	fie->width  = os08b10->cur_mode->width;
+	fie->height = os08b10->cur_mode->height;
+
+	fie->interval.numerator   = os08b10->cur_mode->max_fps.numerator;
+	fie->interval.denominator = os08b10->cur_mode->max_fps.denominator;
+
+	return 0;
+}
+
 static int enum_frame_size(struct v4l2_subdev *sd,
 			   struct v4l2_subdev_pad_config *cfg,
 			   struct v4l2_subdev_frame_size_enum *fse)
@@ -364,7 +379,7 @@ static int start_streaming(struct os08b10 *os08b10)
 	const sns_sync_info_t *sync_info;
 	int ret;
 
-	if (os08b10->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+	if (os08b10->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
 		reg_list = &os08b10->cur_mode->reg_list;
 	} else {//wdr
 		reg_list = &os08b10->cur_mode->wdr_reg_list;
@@ -608,7 +623,7 @@ static long os08b10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	{
 		int type = 0;
 
-		if (os08b10->cur_mode->mipi_wdr_mode == CVI_MIPI_WDR_MODE_NONE) {//linear
+		if (os08b10->cur_mode->mipi_wdr_mode == MIPI_WDR_MODE_NONE) {//linear
 			type = OS08B10_SNS_TYPE_SDR;
 		} else {//wdr
 			type = OS08B10_SNS_TYPE_WDR;
@@ -646,7 +661,7 @@ static long os08b10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		if (hdr_on)
 			os08b10->cur_mode->mipi_wdr_mode = os08b10_wdr_mode;
 		else
-			os08b10->cur_mode->mipi_wdr_mode = CVI_MIPI_WDR_MODE_NONE;
+			os08b10->cur_mode->mipi_wdr_mode = MIPI_WDR_MODE_NONE;
 		os08b10_update_link_menu(os08b10);
 		break;
 	}
@@ -669,7 +684,6 @@ static long os08b10_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static long os08b10_compat_ioctl32(struct v4l2_subdev *sd,
 				   unsigned int cmd, unsigned long arg)
 {
-	void __user *up = compat_ptr(arg);
 	long ret;
 
 	dev_dbg(NULL, "compat ioctl cmd:%d", cmd);
@@ -700,6 +714,7 @@ static const struct v4l2_subdev_pad_ops os08b10_pad_ops = {
 	.get_fmt = get_pad_format,
 	.set_fmt = set_pad_format,
 	.enum_frame_size = enum_frame_size,
+	.enum_frame_interval = enum_frame_interval,
 	.get_mbus_config = g_mbus_config,
 };
 
@@ -927,12 +942,12 @@ static int os08b10_remove(struct i2c_client *client)
 }
 
 static const struct of_device_id os08b10_of_match[] = {
-	{ .compatible = "v4l2,sensor0" },
-	{ .compatible = "v4l2,sensor1" },
-	{ .compatible = "v4l2,sensor2" },
-	{ .compatible = "v4l2,sensor3" },
-	{ .compatible = "v4l2,sensor4" },
-	{ .compatible = "v4l2,sensor5" },
+	{ .compatible = "cvitek,sensor0" },
+	{ .compatible = "cvitek,sensor1" },
+	{ .compatible = "cvitek,sensor2" },
+	{ .compatible = "cvitek,sensor3" },
+	{ .compatible = "cvitek,sensor4" },
+	{ .compatible = "cvitek,sensor5" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, os08b10_of_match);

@@ -109,7 +109,7 @@ typedef enum {
 typedef enum {
 	HDMI_14 = 1,
 	HDMI_20,
-	MHL_24 ,
+	MHL_24,
 	MHL_PACKEDPIXEL
 } operation_mode_t;
 
@@ -121,17 +121,18 @@ typedef enum {
 	COLOR_DEPTH_16 = 16
 } color_depth_t;
 
-struct phy_config{
-	pixel_repetition_t 	pixel;
-	color_depth_t      	color;
-	operation_mode_t 	opmode;
-	u16		 	oppllcfg;
+struct phy_config {
+	pixel_repetition_t	pixel;
+	color_depth_t		color;
+	operation_mode_t	opmode;
+	u16			oppllcfg;
 	u16			pllcurrctrl;
 	u16			pllgmpctrl;
-	u16                 	txterm;
-	u16                 	vlevctrl;
-	u16                 	cksymtxctrl;
+	u16			txterm;
+	u16			vlevctrl;
+	u16			cksymtxctrl;
 };
+
 struct dw_hdmi_mpll_config {
 	unsigned long mpixelclock;
 	struct {
@@ -264,6 +265,8 @@ struct dw_hdmi *dw_hdmi_bind(struct platform_device *pdev,
 			     const struct dw_hdmi_plat_data *plat_data);
 
 void dw_hdmi_resume(struct dw_hdmi *hdmi);
+
+void dw_hdmi_suspend(struct dw_hdmi *hdmi);
 
 void dw_hdmi_setup_rx_sense(struct dw_hdmi *hdmi, bool hpd, bool rx_sense);
 

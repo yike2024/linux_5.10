@@ -183,6 +183,7 @@ static int cvitek_drm_bind(struct device *dev)
 	}
 
 	/* vblank init */
+	drm->irq_enabled = true;
 	ret = drm_vblank_init(drm, drm->mode_config.num_crtc);
 	if (ret) {
 		drm_err(drm, "failed to initialize vblank.\n");
@@ -287,6 +288,24 @@ static void cvitek_drm_platform_shutdown(struct platform_device *pdev)
 		drm_atomic_helper_shutdown(drm);
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int cvitek_drm_suspend(struct device *dev)
+{
+	struct drm_device *drm_dev = dev_get_drvdata(dev);
+
+	return drm_mode_config_helper_suspend(drm_dev);
+}
+
+static int cvitek_drm_resume(struct device *dev)
+{
+	struct drm_device *drm_dev = dev_get_drvdata(dev);
+
+	return drm_mode_config_helper_resume(drm_dev);
+}
+#endif
+
+static SIMPLE_DEV_PM_OPS(cvitek_drm_pm_ops, cvitek_drm_suspend, cvitek_drm_resume);
+
 static const struct of_device_id cvitek_drm_dts_match[] = {
 	{ .compatible = "cvitek,drm-subsystem", },
 	{ /* end node */ },
@@ -299,6 +318,7 @@ static struct platform_driver cvitek_drm_platform_driver = {
 	.shutdown = cvitek_drm_platform_shutdown,
 	.driver = {
 		.name = "cvitek-drm",
+		.pm = &cvitek_drm_pm_ops,
 		.of_match_table = cvitek_drm_dts_match,
 	},
 };

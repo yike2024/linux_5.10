@@ -87,8 +87,10 @@ int bm_ion_alloc(int heap_id, size_t len, bool mmap_cache)
 	query.cnt = HEAP_QUERY_CNT;
 	heap_data = vzalloc(sizeof(*heap_data) * HEAP_QUERY_CNT);
 	query.heaps = (unsigned long)heap_data;
-	if (!query.heaps)
+	if (!query.heaps) {
+		pr_err("vzalloc(%d) failed\n", sizeof(*heap_data) * HEAP_QUERY_CNT);
 		return -ENOMEM;
+	}
 
 	pr_debug("%s: len %zu looking for heapID %d and mmap it as %s\n",
 		 __func__, len, heap_id,
@@ -107,8 +109,10 @@ int bm_ion_alloc(int heap_id, size_t len, bool mmap_cache)
 	force_uaccess_end(old_fs);
 #endif
 
-	if (ret != 0)
+	if (ret != 0) {
+		pr_err("ion_query_heaps failed,ret = %d\n", ret);
 		return ret;
+	}
 
 	vfree(heap_data);
 	//check kernel-thread resource.
@@ -119,8 +123,13 @@ int bm_ion_alloc(int heap_id, size_t len, bool mmap_cache)
 		if (ret < 0)
 			pr_err("[%s] pid=%d,name=%s, do_prlimit error! ret = %d\n", __func__, current->pid, current->comm, ret);
 	}
-	return ion_alloc(len, 1 << heap_id,
-			 ((mmap_cache) ? 1 : 0), &buf);
+	ret = ion_alloc(len, 1 << heap_id,
+			((mmap_cache) ? 1 : 0), &buf);
+	if (ret < 0)
+		pr_err("[%s] pid=%d,name=%s, ret = %d, rlim_cur = %d(%d)\n"
+			, __func__, current->pid, current->comm, ret, old_limit.rlim_cur, INR_OPEN_CUR);
+
+	return ret;
 }
 EXPORT_SYMBOL(bm_ion_alloc);
 

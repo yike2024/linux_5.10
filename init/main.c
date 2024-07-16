@@ -202,12 +202,15 @@ static bool __init obsolete_checksetup(char *line)
 	p = __setup_start;
 	do {
 		int n = strlen(p->str);
+
 		if (parameqn(line, p->str, n)) {
 			if (p->early) {
-				/* Already done in parse_early_param?
+				/*
+				 * Already done in parse_early_param?
 				 * (Needs exact match on param part).
 				 * Keep iterating, as we can have early
-				 * params and __setups of same names 8( */
+				 * params and __setups of same names 8(
+				 */
 				if (line[n] == '\0' || line[n] == '=')
 					had_early_param = true;
 			} else if (!p->setup_func) {
@@ -400,9 +403,8 @@ static u32 boot_config_checksum(unsigned char *p, u32 size)
 static int __init bootconfig_params(char *param, char *val,
 				    const char *unused, void *arg)
 {
-	if (strcmp(param, "bootconfig") == 0) {
+	if (strcmp(param, "bootconfig") == 0)
 		bootconfig_found = true;
-	}
 	return 0;
 }
 
@@ -550,6 +552,7 @@ static int __init unknown_bootoption(char *param, char *val,
 	if (val) {
 		/* Environment option */
 		unsigned int i;
+
 		for (i = 0; envp_init[i]; i++) {
 			if (i == MAX_INIT_ENVS) {
 				panic_later = "env";
@@ -562,6 +565,7 @@ static int __init unknown_bootoption(char *param, char *val,
 	} else {
 		/* Command line option */
 		unsigned int i;
+
 		for (i = 0; argv_init[i]; i++) {
 			if (i == MAX_INIT_ARGS) {
 				panic_later = "init";
@@ -1141,7 +1145,7 @@ static bool __init_or_module initcall_blacklisted(initcall_t fn)
 #else
 static int __init initcall_blacklist(char *str)
 {
-	pr_warn("initcall_blacklist requires CONFIG_KALLSYMS\n");
+	pr_warn("%s requires CONFIG_KALLSYMS\n", __func__);
 	return 0;
 }
 

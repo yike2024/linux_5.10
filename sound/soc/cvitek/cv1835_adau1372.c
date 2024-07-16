@@ -65,6 +65,7 @@ static int cv1835_adau1372_codec_init(struct snd_soc_pcm_runtime *rtd)
 #endif
 	return 0;
 }
+
 static struct snd_soc_ops cv1835_adau1372_ops = {
 	.hw_params = cv1835_adau1372_hw_params,
 };
@@ -129,7 +130,6 @@ static struct snd_soc_dai_link cv1835_adau1372_dai[] = {
 #endif
 };
 
-
 static struct snd_soc_card cv1835_adau1372 = {
 	.owner = THIS_MODULE,
 	.dai_link = cv1835_adau1372_dai,
@@ -149,8 +149,6 @@ static const struct of_device_id cvi_audio_match_ids[] = {
 	{ }
 };
 MODULE_DEVICE_TABLE(of, cvi_audio_match_ids);
-
-
 
 static int cv1835_adau1372_probe(struct platform_device *pdev)
 {
@@ -185,10 +183,14 @@ static int cv1835_adau1372_probe(struct platform_device *pdev)
 			// of_property_read_string(dai, "cvi,platform_name", &card->dai_link[idx].platforms->dai_name);
 			// of_property_read_string(dai, "cvi,platform_name", &card->dai_link[idx].platforms->name);
 			dev_info(&pdev->dev, "----star:%d----\n", idx);
-			dev_info(&pdev->dev, "dailink_name:%s, stream_name:%s\n", card->dai_link[idx].name, card->dai_link[idx].stream_name);
-			dev_info(&pdev->dev, "cpus[name:%s, dainame:%s]\n", card->dai_link[idx].cpus->name, card->dai_link[idx].cpus->dai_name);
-			dev_info(&pdev->dev, "codec[name:%s, dainame:%s]\n", card->dai_link[idx].codecs->name, card->dai_link[idx].codecs->dai_name);
-			dev_info(&pdev->dev, "platforms[name:%s, dainame:%s]\n", card->dai_link[idx].platforms->name, card->dai_link[idx].platforms->dai_name);
+			dev_info(&pdev->dev, "dailink_name:%s, stream_name:%s\n", card->dai_link[idx].name,
+				 card->dai_link[idx].stream_name);
+			dev_info(&pdev->dev, "cpus[name:%s, dainame:%s]\n", card->dai_link[idx].cpus->name,
+				 card->dai_link[idx].cpus->dai_name);
+			dev_info(&pdev->dev, "codec[name:%s, dainame:%s]\n", card->dai_link[idx].codecs->name,
+				 card->dai_link[idx].codecs->dai_name);
+			dev_info(&pdev->dev, "platforms[name:%s, dainame:%s]\n", card->dai_link[idx].platforms->name,
+				 card->dai_link[idx].platforms->dai_name);
 			dev_info(&pdev->dev, "----end:%d ----\n", idx);
 			card->dev = &pdev->dev;
 
@@ -230,7 +232,6 @@ static int cv1835_adau1372_probe(struct platform_device *pdev)
 				card->dai_link[idx].dai_fmt |= SND_SOC_DAIFMT_CBM_CFM;
 			else
 				dev_err(&pdev->dev, "%s, not support this role\n", __func__);
-
 
 			if (!strcmp(mode, "PDM"))
 				tdm_slot_no = slot_no; /* tdm_slot_no is only valid when mode is TDM/PDM */

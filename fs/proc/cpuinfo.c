@@ -8,7 +8,8 @@
 __weak void arch_freq_prepare_all(void)
 {
 }
-__weak long hartid_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+__weak long hartid_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
 	return 0;
 }
 extern const struct seq_operations cpuinfo_op;

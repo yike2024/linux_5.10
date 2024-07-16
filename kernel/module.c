@@ -327,7 +327,7 @@ static inline int strong_try_module_get(struct module *mod)
 		return -ENOENT;
 }
 
-static inline void add_taint_module(struct module *mod, unsigned flag,
+static inline void add_taint_module(struct module *mod, unsigned int flag,
 				    enum lockdep_ok lockdep_ok)
 {
 	add_taint(flag, lockdep_ok);
@@ -902,6 +902,7 @@ static void module_unload_free(struct module *mod)
 	mutex_lock(&module_mutex);
 	list_for_each_entry_safe(use, tmp, &mod->target_list, target_list) {
 		struct module *i = use->target;
+
 		pr_debug("%s unusing %s\n", mod->name, i->name);
 		module_put(i);
 		list_del(&use->source_list);
@@ -1616,6 +1617,7 @@ static void add_sect_attrs(struct module *mod, const struct load_info *info)
 	gattr = &sect_attrs->grp.bin_attrs[0];
 	for (i = 0; i < info->hdr->e_shnum; i++) {
 		Elf_Shdr *sec = &info->sechdrs[i];
+
 		if (sect_empty(sec))
 			continue;
 		sysfs_bin_attr_init(&sattr->battr);
@@ -2633,6 +2635,7 @@ static int is_exported(const char *name, unsigned long value,
 		       const struct module *mod)
 {
 	const struct kernel_symbol *ks;
+
 	if (!mod)
 		ks = lookup_exported_symbol(name, __start___ksymtab, __stop___ksymtab);
 	else
@@ -3055,6 +3058,7 @@ static int rewrite_section_headers(struct load_info *info, int flags)
 
 	for (i = 1; i < info->hdr->e_shnum; i++) {
 		Elf_Shdr *shdr = &info->sechdrs[i];
+
 		if (shdr->sh_type != SHT_NOBITS
 		    && info->len < shdr->sh_offset + shdr->sh_size) {
 			pr_err("Module len %lu truncated\n", info->len);
@@ -3623,9 +3627,8 @@ static noinline int do_init_module(struct module *mod)
 	/* Start the module */
 	if (mod->init != NULL)
 		ret = do_one_initcall(mod->init);
-	if (ret < 0) {
+	if (ret < 0)
 		goto fail_free_freeinit;
-	}
 	if (ret > 0) {
 		pr_warn("%s: '%s'->init suspiciously returned %d, it should "
 			"follow 0/-E convention\n"

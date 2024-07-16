@@ -16,7 +16,6 @@ void __iomem *master_reg;
 u32 current_freq;
 void __iomem *subsys_reg;
 
-
 u32 i2s_subsys_query_master(void)
 {
 	return dev->master_id;
@@ -183,7 +182,6 @@ void cv1835_set_mclk(u32 freq)
 #endif
 }
 
-
 void dwi2s_set_mclk(u32 dwi2s_mode, u32 slave_source, u32 ctl0, u32 ctl1)
 {
 	if (subsys_reg) {
@@ -197,10 +195,10 @@ void dwi2s_set_mclk(u32 dwi2s_mode, u32 slave_source, u32 ctl0, u32 ctl1)
 void dwi2s_get_subsys(void)
 {
 	if (subsys_reg) {
-		pr_info("[%s][subsys:%px]dwi2s_mode:0x%x, dwi2s_slacemode_source:0x%x, clk_ctrl0:0x%x, clk_ctrl1:%x\n",
-				subsys_reg, __func__, readl(subsys_reg + DW_I2S_MODE_REG),
-				readl(subsys_reg + DW_I2S_SLAVEMODE_SOURCE),
-				readl(subsys_reg + DW_I2S_CLK_CTRL0), readl(subsys_reg + DW_I2S_CLK_CTRL1));
+		pr_info("[%s][subsys:%p]dwi2s_mode:0x%x, dwi2s_slacemode_source:0x%x, clk_ctrl0:0x%x, clk_ctrl1:%x\n",
+			subsys_reg, __func__, readl(subsys_reg + DW_I2S_MODE_REG),
+			readl(subsys_reg + DW_I2S_SLAVEMODE_SOURCE),
+			readl(subsys_reg + DW_I2S_CLK_CTRL0), readl(subsys_reg + DW_I2S_CLK_CTRL1));
 	}
 }
 
@@ -217,7 +215,6 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	dev->subsys_base = devm_ioremap_resource(&pdev->dev, res);
-	printk("rachel: i2s subsys_base:%p\n", dev->subsys_base);
 	dev_dbg(&pdev->dev, "I2S get i2s_subsys_base=0x%p\n", dev->subsys_base);
 	if (IS_ERR(dev->subsys_base))
 		return PTR_ERR(dev->subsys_base);
@@ -313,8 +310,6 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 	return 0;
 }
 
-
-
 #define CV182X_DAC_RESET	0xF7FFFFFF
 #define CV182X_ADC_RESET	0xDFFFFFFF
 #define CV182XA_DAC_RESET	0xF7FFFFFF
@@ -324,7 +319,6 @@ static int i2s_subsys_probe(struct platform_device *pdev)
 #define CV186X_DAC1_RESET	0xFFDFFFFF
 #define CV186X_ADC0_RESET	0xFFEFFFFF
 #define CV186X_ADC1_RESET	0xFF7FFFFF
-
 
 /* while cv182x codecs transfer CIC between 64 and 128, need to reset codec first */
 void cv182x_reset_dac(void)

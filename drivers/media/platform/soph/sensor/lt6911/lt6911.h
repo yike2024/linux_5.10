@@ -19,11 +19,11 @@ static s64 lt6911_link_cif_menu[MAX_SENSOR_DEVICE][SNS_CFG_TYPE_MAX] = {
 		0,                      //2:mclk num
 		RX_MAC_CLK_600M,        //3:mac clk
 		INPUT_MODE_MIPI,        //4:input mode
-		CVI_MIPI_WDR_MODE_NONE, //5:wdr mode
+		MIPI_WDR_MODE_NONE, //5:wdr mode
 		YUV422_8BIT,		    //6:data type
 		0,                      //7:mipi_dev
 		1,                      //8:dphy.enable
-		24,                      //9:dphy.hs_settle
+		18,                      //9:dphy.hs_settle
 		0,                      //10:cif phy mode
 		2,                      //LANE_0
 		4,                      //LANE_1

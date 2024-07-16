@@ -328,9 +328,8 @@ void efi_get_virtmap(efi_memory_desc_t *memory_map, unsigned long map_size,
 		size = in->num_pages * EFI_PAGE_SIZE;
 
 		in->virt_addr = in->phys_addr;
-		if (efi_novamap) {
+		if (efi_novamap)
 			continue;
-		}
 
 		/*
 		 * Make the mapping compatible with 64k pages: this allows

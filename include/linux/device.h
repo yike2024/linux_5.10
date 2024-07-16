@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * device.h - generic, centralized driver model
  *
@@ -370,36 +370,36 @@ struct dev_links_info {
 /**
  * struct device - The basic device structure
  * @parent:	The device's "parent" device, the device to which it is attached.
- * 		In most cases, a parent device is some sort of bus or host
- * 		controller. If parent is NULL, the device, is a top-level device,
- * 		which is not usually what you want.
+ *		In most cases, a parent device is some sort of bus or host
+ *		controller. If parent is NULL, the device, is a top-level device,
+ *		which is not usually what you want.
  * @p:		Holds the private data of the driver core portions of the device.
- * 		See the comment of the struct device_private for detail.
+ *		See the comment of the struct device_private for detail.
  * @kobj:	A top-level, abstract class from which other classes are derived.
  * @init_name:	Initial name of the device.
  * @type:	The type of device.
- * 		This identifies the device type and carries type-specific
- * 		information.
+ *		This identifies the device type and carries type-specific
+ *		information.
  * @mutex:	Mutex to synchronize calls to its driver.
  * @lockdep_mutex: An optional debug lock that a subsystem can use as a
- * 		peer lock to gain localized lockdep coverage of the device_lock.
+ *		peer lock to gain localized lockdep coverage of the device_lock.
  * @bus:	Type of bus device is on.
  * @driver:	Which driver has allocated this
  * @platform_data: Platform data specific to the device.
- * 		Example: For devices on custom boards, as typical of embedded
- * 		and SOC based hardware, Linux often uses platform_data to point
- * 		to board-specific structures describing devices and how they
- * 		are wired.  That can include what ports are available, chip
- * 		variants, which GPIO pins act in what additional roles, and so
- * 		on.  This shrinks the "Board Support Packages" (BSPs) and
- * 		minimizes board-specific #ifdefs in drivers.
+ *		Example: For devices on custom boards, as typical of embedded
+ *		and SOC based hardware, Linux often uses platform_data to point
+ *		to board-specific structures describing devices and how they
+ *		are wired.  That can include what ports are available, chip
+ *		variants, which GPIO pins act in what additional roles, and so
+ *		on.  This shrinks the "Board Support Packages" (BSPs) and
+ *		minimizes board-specific #ifdefs in drivers.
  * @driver_data: Private pointer for driver specific info.
  * @links:	Links to suppliers and consumers of this device.
  * @power:	For device power management.
  *		See Documentation/driver-api/pm/devices.rst for details.
  * @pm_domain:	Provide callbacks that are executed during system suspend,
- * 		hibernation, system resume and during runtime PM transitions
- * 		along with subsystem-level and driver-level callbacks.
+ *		hibernation, system resume and during runtime PM transitions
+ *		along with subsystem-level and driver-level callbacks.
  * @em_pd:	device's energy model performance domain
  * @pins:	For device pin management.
  *		See Documentation/driver-api/pinctl.rst for details.
@@ -409,13 +409,13 @@ struct dev_links_info {
  * @dma_ops:    DMA mapping operations for this device.
  * @dma_mask:	Dma mask (if dma'ble device).
  * @coherent_dma_mask: Like dma_mask, but for alloc_coherent mapping as not all
- * 		hardware supports 64-bit addresses for consistent allocations
- * 		such descriptors.
+ *		hardware supports 64-bit addresses for consistent allocations
+ *		such descriptors.
  * @bus_dma_limit: Limit of an upstream bridge or bus which imposes a smaller
  *		DMA limit than the device itself supports.
  * @dma_range_map: map for DMA memory ranges relative to that of RAM
  * @dma_parms:	A low level driver may set these to teach IOMMU code about
- * 		segment limitations.
+ *		segment limitations.
  * @dma_pools:	Dma pools (if dma'ble device).
  * @dma_mem:	Internal for coherent mem override.
  * @cma_area:	Contiguous memory area for dma allocations
@@ -430,8 +430,8 @@ struct dev_links_info {
  * @class:	The class of the device.
  * @groups:	Optional attribute groups.
  * @release:	Callback to free the device after all references have
- * 		gone away. This should be set by the allocator of the
- * 		device (i.e. the bus driver that discovered the device).
+ *		gone away. This should be set by the allocator of the
+ *		device (i.e. the bus driver that discovered the device).
  * @iommu_group: IOMMU group the device belongs to.
  * @iommu:	Per device generic IOMMU runtime data
  *
@@ -469,11 +469,14 @@ struct device {
 
 	struct bus_type	*bus;		/* type of bus device is on */
 	struct device_driver *driver;	/* which driver has allocated this
-					   device */
+					 * device
+					 */
 	void		*platform_data;	/* Platform specific data, device
-					   core doesn't touch it */
+					 * core doesn't touch it
+					 */
 	void		*driver_data;	/* Driver data, set and get with
-					   dev_set_drvdata/dev_get_drvdata */
+					 * dev_set_drvdata/dev_get_drvdata
+					 */
 #ifdef CONFIG_PROVE_LOCKING
 	struct mutex		lockdep_mutex;
 #endif
@@ -503,10 +506,11 @@ struct device {
 #endif
 	u64		*dma_mask;	/* dma mask (if dma'able device) */
 	u64		coherent_dma_mask;/* Like dma_mask, but for
-					     alloc_coherent mappings as
-					     not all hardware supports
-					     64 bit addresses for consistent
-					     allocations such descriptors. */
+					   * alloc_coherent mappings as
+					   * not all hardware supports
+					   * 64 bit addresses for consistent
+					   * allocations such descriptors.
+					   */
 	u64		bus_dma_limit;	/* upstream dma constraint */
 	const struct bus_dma_region *dma_range_map;
 
@@ -516,11 +520,13 @@ struct device {
 
 #ifdef CONFIG_DMA_DECLARE_COHERENT
 	struct dma_coherent_mem	*dma_mem; /* internal for coherent mem
-					     override */
+					   * override
+					   */
 #endif
 #ifdef CONFIG_DMA_CMA
 	struct cma *cma_area;		/* contiguous memory area for dma
-					   allocations */
+					 * allocations
+					 */
 #endif
 	/* arch specific additions */
 	struct dev_archdata	archdata;
@@ -549,8 +555,8 @@ struct device {
 	bool			of_node_reused:1;
 	bool			state_synced:1;
 #if defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_DEVICE) || \
-    defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU) || \
-    defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU_ALL)
+	defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU) || \
+	defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU_ALL)
 	bool			dma_coherent:1;
 #endif
 #ifdef CONFIG_DMA_OPS_BYPASS
@@ -932,7 +938,7 @@ extern __printf(3, 4)
 int dev_err_probe(const struct device *dev, int err, const char *fmt, ...);
 
 /* Create alias, so I can be autoloaded. */
-#define MODULE_ALIAS_CHARDEV(major,minor) \
+#define MODULE_ALIAS_CHARDEV(major, minor) \
 	MODULE_ALIAS("char-major-" __stringify(major) "-" __stringify(minor))
 #define MODULE_ALIAS_CHARDEV_MAJOR(major) \
 	MODULE_ALIAS("char-major-" __stringify(major) "-*")
